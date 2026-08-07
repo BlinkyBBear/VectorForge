@@ -1,8 +1,8 @@
 """
 High-quality vectorization via vtracer (visioncortex).
 
-Memory-safe: caller must pass an already-downsampled image.
-Tuned defaults produce tight, laser-ready black fills for signs & logos.
+For laser presets we force a pure black-and-white image before tracing.
+This is the only way to get the tight, solid fills needed for cutting.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 
 from .image_ops import downsample_image
 from .memory import clamp_process_size
@@ -49,30 +49,55 @@ def _count_svg_stats(svg: str) -> tuple[int, int]:
     return paths, nodes
 
 
-def _prepare_for_laser(img: Image.Image, force_mono: bool, threshold: int = 140) -> Image.Image:
+def _prepare_for_laser(img: Image.Image, force_mono: bool, threshold: int = 128) -> Image.Image:
     """
-    Convert to high-contrast mono when requested.
-    This is the single biggest quality win for laser signs.
+    Aggressive pure black / white conversion.
+
+    Goal: solid black subject on pure white background so vtracer
+    produces clean filled paths instead of multi-colour fragments.
     """
     rgba = img.convert("RGBA")
-    if not force_mono:
-        # Still flatten transparency onto pure white
-        bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
-        return Image.alpha_composite(bg, rgba).convert("RGB")
 
-    # High-contrast mono pipeline
-    # 1. Flatten on white
+    # Always flatten transparency onto pure white first
     bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
-    flat = Image.alpha_composite(bg, rgba).convert("L")
+    flat_rgba = Image.alpha_composite(bg, rgba)
 
-    # 2. Mild sharpen + contrast boost so thin lines stay solid
-    flat = ImageOps.autocontrast(flat, cutoff=1)
-    flat = flat.filter(ImageFilter.SHARPEN)
+    if not force_mono:
+        return flat_rgba.convert("RGB")
 
-    # 3. Hard threshold → pure black / white
-    thr = max(40, min(220, int(threshold)))
-    bw = flat.point(lambda p: 0 if p < thr else 255, mode="L")
+    # --- Aggressive mono pipeline ---
+    gray = flat_rgba.convert("L")
+
+    # Boost contrast hard so the subject becomes pure black
+    gray = ImageOps.autocontrast(gray, cutoff=2)
+    gray = ImageEnhance.Contrast(gray).enhance(2.2)
+    gray = gray.filter(ImageFilter.SHARPEN)
+
+    # Hard threshold → pure black or pure white
+    thr = max(30, min(220, int(threshold)))
+    bw = gray.point(lambda p: 0 if p < thr else 255, mode="L")
+
+    # Optional morphological clean-up (remove tiny speckles before tracing)
+    # We do a simple 1-pixel dilate/erode using max/min filters
+    bw = bw.filter(ImageFilter.MaxFilter(3))
+    bw = bw.filter(ImageFilter.MinFilter(3))
+
     return bw.convert("RGB")
+
+
+def _clean_svg_for_laser(svg: str) -> str:
+    """Force every fill to pure black and remove tiny path noise if possible."""
+    # Force black fills
+    svg = re.sub(r'fill="#[0-9a-fA-F]{3,8}"', 'fill="#000000"', svg)
+    svg = re.sub(r"fill='#[0-9a-fA-F]{3,8}'", "fill='#000000'", svg)
+    svg = re.sub(r'fill="rgb\([^)]+\)"', 'fill="#000000"', svg)
+    svg = re.sub(r'fill="hsl\([^)]+\)"', 'fill="#000000"', svg)
+
+    # Remove stroke colours that are not black (keep structure simple)
+    svg = re.sub(r'stroke="#[0-9a-fA-F]{3,8}"', 'stroke="none"', svg)
+    svg = re.sub(r"stroke='#[0-9a-fA-F]{3,8}'", "stroke='none'", svg)
+
+    return svg
 
 
 def vectorize_image(
@@ -95,13 +120,18 @@ def vectorize_image(
     vt = apply_preset(params.preset_id, params.overrides)
     vt["max_process_size"] = max_side
 
-    force_mono = bool(vt.get("force_mono", vt.get("colormode") == "binary"))
-    threshold = int(vt.get("threshold", 140))
+    # Force mono for any laser / logo style preset
+    force_mono = bool(
+        vt.get("force_mono", False)
+        or vt.get("colormode") == "binary"
+        or params.preset_id in ("laser", "logo")
+    )
+    threshold = int(vt.get("threshold", 128))
 
-    report(f"Preparing image @ {plan.label}", 0.15)
+    report(f"Preparing pure black/white @ {plan.label}", 0.12)
     prepared = _prepare_for_laser(work, force_mono=force_mono, threshold=threshold)
 
-    report(f"Vectorizing @ {plan.label}", 0.3)
+    report("Running vtracer (binary / tight)", 0.35)
 
     with tempfile.TemporaryDirectory(prefix="vectorforge_") as tmp:
         tmp_path = Path(tmp)
@@ -109,16 +139,19 @@ def vectorize_image(
         dst = tmp_path / "output.svg"
         prepared.save(src, format="PNG")
 
-        report("Running vtracer (tight paths)", 0.45)
+        # Very aggressive settings when we want laser quality
+        filter_speckle = int(vt.get("filter_speckle", 12))
+        if force_mono:
+            filter_speckle = max(filter_speckle, 10)
 
         common = dict(
-            colormode=str(vt.get("colormode", "binary")),
-            hierarchical=str(vt.get("hierarchical", "stacked")),
+            colormode="binary" if force_mono else str(vt.get("colormode", "color")),
+            hierarchical="stacked",
             mode=str(vt.get("mode", "spline")),
-            filter_speckle=int(vt.get("filter_speckle", 10)),
+            filter_speckle=filter_speckle,
             color_precision=int(vt.get("color_precision", 6)),
-            corner_threshold=int(vt.get("corner_threshold", 70)),
-            length_threshold=float(vt.get("length_threshold", 5.0)),
+            corner_threshold=int(vt.get("corner_threshold", 80)),
+            length_threshold=float(vt.get("length_threshold", 5.5)),
             path_precision=int(vt.get("path_precision", 2)),
         )
 
@@ -132,14 +165,13 @@ def vectorize_image(
                 **common,
             )
         except TypeError:
-            # Older vtracer API
             vtracer.convert_image_to_svg_py(
                 str(src),
                 str(dst),
                 **common,
             )
 
-        report("Reading SVG", 0.9)
+        report("Cleaning SVG", 0.9)
         svg = dst.read_text(encoding="utf-8")
 
     # Inject metadata
@@ -153,11 +185,8 @@ def vectorize_image(
     else:
         svg = meta + svg
 
-    # Force pure black fills for laser presets (removes any residual colour)
     if force_mono:
-        svg = re.sub(r'fill="#[0-9a-fA-F]{3,8}"', 'fill="#000000"', svg)
-        svg = re.sub(r"fill='#[0-9a-fA-F]{3,8}'", "fill='#000000'", svg)
-        svg = re.sub(r'fill="rgb\([^"]+\)"', 'fill="#000000"', svg)
+        svg = _clean_svg_for_laser(svg)
 
     paths, nodes = _count_svg_stats(svg)
     ms = int((time.perf_counter() - t0) * 1000)
