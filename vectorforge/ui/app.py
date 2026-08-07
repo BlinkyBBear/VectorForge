@@ -1,20 +1,20 @@
 """
 VectorForge desktop UI — CustomTkinter.
 
-Fully offline after install (rembg model cached under U2NET_HOME / ~/.u2net).
-Heavy work runs on a worker thread so the UI stays responsive.
+- Live brush preview while dragging
+- Background-removal strength slider
+- Defaults to tight Laser Optimized preset
 """
 
 from __future__ import annotations
 
-import io
 import threading
 import traceback
 from pathlib import Path
 from typing import Callable
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 
 from vectorforge.engine.bg_remove import (
     auto_remove_background,
@@ -25,7 +25,7 @@ from vectorforge.engine.bg_remove import (
 from vectorforge.engine.image_ops import load_image
 from vectorforge.engine.memory import HARD_MAX_PROCESS_SIZE, clamp_process_size
 from vectorforge.engine.presets import DEFAULT_PRESET_ID, PRESETS
-from vectorforge.engine.vectorize import VectorizeParams, save_svg, vectorize_image
+from vectorforge.engine.vectorize import VectorizeParams, vectorize_image
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -46,17 +46,19 @@ class VectorForgeApp(ctk.CTk):
         self._busy = False
         self._brush_points: list[tuple[float, float]] = []
         self._source_path: Path | None = None
+        self._preview_scale = 1.0
+        self._preview_size = (1, 1)
+        self._canvas_size = (1, 1)
+        self._brush_overlay_ids: list[int] = []
 
         self._build()
         self._set_status(rembg_status())
 
-    # ── layout ──────────────────────────────────────────────
     def _build(self) -> None:
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # Sidebar
-        side = ctk.CTkFrame(self, width=320, corner_radius=0)
+        side = ctk.CTkFrame(self, width=330, corner_radius=0)
         side.grid(row=0, column=0, sticky="nsew")
         side.grid_propagate(False)
 
@@ -79,18 +81,17 @@ class VectorForgeApp(ctk.CTk):
         )
         self.preset_var = ctk.StringVar(value=DEFAULT_PRESET_ID)
         labels = [f"{k} — {v['label']}" for k, v in PRESETS.items()]
-        self._preset_keys = list(PRESETS.keys())
         self.preset_menu = ctk.CTkOptionMenu(
-            side,
-            values=labels,
-            command=self._on_preset_label,
+            side, values=labels, command=self._on_preset_label
         )
-        self.preset_menu.set(f"{DEFAULT_PRESET_ID} — {PRESETS[DEFAULT_PRESET_ID]['label']}")
+        self.preset_menu.set(
+            f"{DEFAULT_PRESET_ID} — {PRESETS[DEFAULT_PRESET_ID]['label']}"
+        )
         self.preset_menu.pack(fill="x", padx=16, pady=2)
         self.preset_desc = ctk.CTkLabel(
             side,
             text=PRESETS[DEFAULT_PRESET_ID]["description"],
-            wraplength=280,
+            wraplength=290,
             justify="left",
             font=ctk.CTkFont(size=11),
             text_color="gray65",
@@ -105,12 +106,13 @@ class VectorForgeApp(ctk.CTk):
             fill="x", padx=16
         )
         self.max_side.pack(fill="x", padx=16, pady=2)
-        self.max_side_label = ctk.CTkLabel(side, text="1800 px", anchor="w")
+        self.max_side_label = ctk.CTkLabel(side, text="1400 px", anchor="w")
         self.max_side_label.pack(fill="x", padx=16)
         self.max_side.configure(command=self._on_max_side)
 
-        ctk.CTkLabel(side, text="BG tool", anchor="w").pack(
-            fill="x", padx=16, pady=(12, 2)
+        # Background tools
+        ctk.CTkLabel(side, text="Background tools", anchor="w").pack(
+            fill="x", padx=16, pady=(14, 2)
         )
         self.bg_tool = ctk.StringVar(value="auto")
         tools = ctk.CTkFrame(side, fg_color="transparent")
@@ -119,18 +121,29 @@ class VectorForgeApp(ctk.CTk):
             ("auto", "Auto"),
             ("erase", "Erase"),
             ("restore", "Restore"),
-            ("brush", "Brush−"),
+            ("brush", "Brush"),
         ):
             ctk.CTkRadioButton(
                 tools, text=label, variable=self.bg_tool, value=key
-            ).pack(side="left", padx=4)
+            ).pack(side="left", padx=3)
 
         self.tolerance = ctk.CTkSlider(side, from_=8, to=80)
         self.tolerance.set(36)
-        ctk.CTkLabel(side, text="Wand tolerance", anchor="w").pack(
+        ctk.CTkLabel(side, text="Wand / flood tolerance", anchor="w").pack(
             fill="x", padx=16, pady=(8, 0)
         )
         self.tolerance.pack(fill="x", padx=16)
+
+        # NEW: Background removal strength
+        self.bg_strength = ctk.CTkSlider(side, from_=0.0, to=1.0, number_of_steps=20)
+        self.bg_strength.set(0.85)
+        ctk.CTkLabel(side, text="BG removal strength", anchor="w").pack(
+            fill="x", padx=16, pady=(10, 0)
+        )
+        self.bg_strength.pack(fill="x", padx=16)
+        self.bg_strength_label = ctk.CTkLabel(side, text="0.85 (strong)", anchor="w")
+        self.bg_strength_label.pack(fill="x", padx=16)
+        self.bg_strength.configure(command=self._on_bg_strength)
 
         ctk.CTkButton(
             side, text="Auto remove background", command=self._auto_bg
@@ -143,12 +156,12 @@ class VectorForgeApp(ctk.CTk):
             side,
             text="Vectorize",
             command=self._vectorize,
-            height=40,
+            height=42,
             font=ctk.CTkFont(size=14, weight="bold"),
-        ).pack(fill="x", padx=16, pady=(16, 4))
-        ctk.CTkButton(
-            side, text="Export SVG…", command=self._export_svg
-        ).pack(fill="x", padx=16, pady=4)
+        ).pack(fill="x", padx=16, pady=(18, 4))
+        ctk.CTkButton(side, text="Export SVG…", command=self._export_svg).pack(
+            fill="x", padx=16, pady=4
+        )
 
         self.stats = ctk.CTkLabel(
             side,
@@ -164,7 +177,7 @@ class VectorForgeApp(ctk.CTk):
         self.progress.set(0)
         self.progress.pack(fill="x", padx=16, pady=(0, 8))
 
-        # Main canvas area
+        # Main canvas
         main = ctk.CTkFrame(self, corner_radius=0)
         main.grid(row=0, column=1, sticky="nsew")
         main.grid_rowconfigure(0, weight=1)
@@ -181,10 +194,9 @@ class VectorForgeApp(ctk.CTk):
         )
         self.status.grid(row=1, column=0, sticky="ew", padx=8, pady=4)
 
-        # Checkerboard-ish hint via label
         self.drop_hint = ctk.CTkLabel(
             self.canvas,
-            text="Drop / Open a JPEG, PNG, WebP, BMP…\nThen: Auto remove BG → refine clicks → Vectorize → Export SVG",
+            text="Open a JPEG / PNG / WebP…\nAuto remove BG → refine → Vectorize (Laser preset) → Export SVG",
             font=ctk.CTkFont(size=14),
             text_color="gray60",
         )
@@ -198,21 +210,20 @@ class VectorForgeApp(ctk.CTk):
             self.preset_desc.configure(text=PRESETS[key]["description"])
             self.max_side.set(PRESETS[key]["params"]["max_process_size"])
             self._on_max_side(self.max_side.get())
-            if key == "max":
-                self._set_status(
-                    "Maximum Quality uses more memory/CPU — offline still safe."
-                )
 
     def _on_max_side(self, value: float) -> None:
         self.max_side_label.configure(text=f"{int(round(value))} px")
+
+    def _on_bg_strength(self, value: float) -> None:
+        v = float(value)
+        label = "gentle" if v < 0.4 else "medium" if v < 0.7 else "strong"
+        self.bg_strength_label.configure(text=f"{v:.2f} ({label})")
 
     def _set_status(self, msg: str) -> None:
         self.status.configure(text=msg)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
-        state = "disabled" if busy else "normal"
-        # CTk buttons don't all share state the same way — ignore failures
         try:
             self.progress.start() if busy else self.progress.stop()
         except Exception:
@@ -220,7 +231,9 @@ class VectorForgeApp(ctk.CTk):
         if not busy:
             self.progress.set(0)
 
-    def _run_async(self, fn: Callable[[], None], on_done: Callable[[], None] | None = None) -> None:
+    def _run_async(
+        self, fn: Callable[[], None], on_done: Callable[[], None] | None = None
+    ) -> None:
         if self._busy:
             self._set_status("Busy — wait for current job to finish.")
             return
@@ -248,10 +261,18 @@ class VectorForgeApp(ctk.CTk):
     def _active_image(self) -> Image.Image | None:
         return self._subject if self._subject is not None else self._source
 
+    def _clear_brush_overlay(self) -> None:
+        for iid in self._brush_overlay_ids:
+            try:
+                self.canvas.delete(iid)
+            except Exception:
+                pass
+        self._brush_overlay_ids.clear()
+
     def _show_image(self, img: Image.Image) -> None:
         self._display = img
         self.drop_hint.place_forget()
-        # Fit to canvas
+        self._clear_brush_overlay()
         self.canvas.update_idletasks()
         cw = max(100, self.canvas.winfo_width())
         ch = max(100, self.canvas.winfo_height())
@@ -259,19 +280,20 @@ class VectorForgeApp(ctk.CTk):
         scale = min(cw / w, ch / h, 1.0) * 0.95
         dw, dh = max(1, int(w * scale)), max(1, int(h * scale))
         preview = img.resize((dw, dh), Image.Resampling.BILINEAR)
-        # Composite on checker-like dark for alpha
+
         if preview.mode == "RGBA":
             bg = Image.new("RGBA", preview.size, (40, 40, 44, 255))
-            # simple checker
-            for y in range(0, dh, 12):
-                for x in range(0, dw, 12):
-                    if ((x // 12) + (y // 12)) % 2 == 0:
-                        for yy in range(y, min(y + 12, dh)):
-                            for xx in range(x, min(x + 12, dw)):
+            # cheap checker
+            for y in range(0, dh, 14):
+                for x in range(0, dw, 14):
+                    if ((x // 14) + (y // 14)) % 2 == 0:
+                        for yy in range(y, min(y + 14, dh)):
+                            for xx in range(x, min(x + 14, dw)):
                                 bg.putpixel((xx, yy), (52, 52, 58, 255))
             preview = Image.alpha_composite(bg, preview).convert("RGB")
         else:
             preview = preview.convert("RGB")
+
         self._photo = ImageTk.PhotoImage(preview)
         self.canvas.delete("all")
         self.canvas.create_image(cw // 2, ch // 2, image=self._photo, anchor="center")
@@ -281,11 +303,10 @@ class VectorForgeApp(ctk.CTk):
 
     def _canvas_to_image(self, event_x: int, event_y: int) -> tuple[float, float] | None:
         img = self._active_image()
-        if img is None or not hasattr(self, "_preview_scale"):
+        if img is None:
             return None
         cw, ch = self._canvas_size
         dw, dh = self._preview_size
-        # image top-left on canvas
         left = (cw - dw) / 2
         top = (ch - dh) / 2
         px = (event_x - left) / self._preview_scale
@@ -293,6 +314,13 @@ class VectorForgeApp(ctk.CTk):
         if px < 0 or py < 0 or px >= img.width or py >= img.height:
             return None
         return px, py
+
+    def _image_to_canvas(self, px: float, py: float) -> tuple[float, float]:
+        cw, ch = self._canvas_size
+        dw, dh = self._preview_size
+        left = (cw - dw) / 2
+        top = (ch - dh) / 2
+        return left + px * self._preview_scale, top + py * self._preview_scale
 
     # ── actions ─────────────────────────────────────────────
     def _open_image(self) -> None:
@@ -327,17 +355,23 @@ class VectorForgeApp(ctk.CTk):
             self._set_status("Open an image first.")
             return
 
+        strength = float(self.bg_strength.get())
+        # Map strength 0..1 → tolerance (higher strength = more aggressive = higher tolerance for flood fallback)
+        tol = int(20 + strength * 50)
+
         def job() -> None:
             self.after(0, lambda: self._set_status("Removing background (offline)…"))
             self.after(0, lambda: self.progress.set(0.3))
-            out = auto_remove_background(self._source, prefer_ai=True)
+            out = auto_remove_background(
+                self._source, prefer_ai=True, tolerance=tol
+            )
             self._subject = out
             self.after(0, lambda: self._show_image(out))
             self.after(0, lambda: self.progress.set(1.0))
             self.after(
                 0,
                 lambda: self._set_status(
-                    "Subject ready — click Erase/Restore to refine, then Vectorize"
+                    "Subject ready — use Erase / Brush to refine, then Vectorize"
                 ),
             )
 
@@ -345,6 +379,7 @@ class VectorForgeApp(ctk.CTk):
 
     def _reset_subject(self) -> None:
         self._subject = None
+        self._clear_brush_overlay()
         if self._source is not None:
             self._show_image(self._source)
         self._set_status("Subject reset to original")
@@ -356,6 +391,7 @@ class VectorForgeApp(ctk.CTk):
         pt = self._canvas_to_image(event.x, event.y)
         if pt is None:
             return
+
         if tool in ("erase", "restore", "auto"):
             erase = tool != "restore"
 
@@ -374,15 +410,43 @@ class VectorForgeApp(ctk.CTk):
                 self.after(0, lambda: self._set_status("Refined subject"))
 
             self._run_async(job)
+
         elif tool == "brush":
             self._brush_points = [pt]
+            self._clear_brush_overlay()
+            # draw first circle immediately
+            cx, cy = self._image_to_canvas(*pt)
+            r = 8
+            iid = self.canvas.create_oval(
+                cx - r, cy - r, cx + r, cy + r,
+                outline="#ff5555", width=2, fill=""
+            )
+            self._brush_overlay_ids.append(iid)
 
     def _on_canvas_drag(self, event) -> None:  # noqa: ANN001
         if self.bg_tool.get() != "brush" or self._busy:
             return
         pt = self._canvas_to_image(event.x, event.y)
-        if pt:
-            self._brush_points.append(pt)
+        if not pt:
+            return
+        self._brush_points.append(pt)
+
+        # LIVE PREVIEW — draw a trail of circles while dragging
+        cx, cy = self._image_to_canvas(*pt)
+        r = 8
+        iid = self.canvas.create_oval(
+            cx - r, cy - r, cx + r, cy + r,
+            outline="#ff5555", width=1, fill=""
+        )
+        self._brush_overlay_ids.append(iid)
+
+        # Keep overlay list from growing forever
+        if len(self._brush_overlay_ids) > 400:
+            old = self._brush_overlay_ids.pop(0)
+            try:
+                self.canvas.delete(old)
+            except Exception:
+                pass
 
     def _on_canvas_release(self, event) -> None:  # noqa: ANN001
         if self.bg_tool.get() != "brush" or not self._brush_points:
@@ -396,6 +460,7 @@ class VectorForgeApp(ctk.CTk):
             out = brush_stroke(base, pts, radius=14, erase=True)
             self._subject = out
             self.after(0, lambda: self._show_image(out))
+            self.after(0, lambda: self._set_status("Brush applied"))
 
         self._run_async(job)
 
