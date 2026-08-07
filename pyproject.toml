@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vectorforge"
+version = "2.0.0"
+description = "Offline image-to-SVG vectorizer for laser cutting"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "VectorForge contributors" }]
+dependencies = [
+  "customtkinter>=5.2.2",
+  "Pillow>=10.0.0",
+  "numpy>=1.24.0",
+  "vtracer>=0.6.12",
+  "rembg[cpu]>=2.0.50",
+]
+
+[project.scripts]
+vectorforge = "vectorforge.__main__:main"
+vectorforge-cli = "vectorforge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vectorforge*"]

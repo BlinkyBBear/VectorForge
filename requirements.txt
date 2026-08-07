@@ -1,0 +1,18 @@
+# VectorForge desktop — offline image → laser-ready SVG
+# Python 3.10+ recommended (3.11/3.12 fine on Windows)
+
+# UI
+customtkinter>=5.2.2
+
+# Imaging
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# High-quality vectorization (Rust core, Python bindings)
+vtracer>=0.6.12
+
+# Offline AI background removal (ONNX Runtime CPU)
+rembg[cpu]>=2.0.50
+
+# Packaging (dev / build machines)
+pyinstaller>=6.0.0

@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.spec.bak
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# rembg / onnx model cache (do not commit ~176MB models)
+.u2net/
+*.onnx
+
+# PyInstaller artifacts
+*.manifest
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+
+# Legacy web prototype / sandbox leftovers (not part of desktop product)
+node_modules/
+.pnp
+.pnp.js
+.output/
+.vercel/
+package.json
+package-lock.json
+node_modules/
+src/
+public/
+desktop/
+electron-builder.yml
+vite.config.ts
+tsconfig.json
+eslint.config.mjs
+.prettierrc
+.node_modules.lock
+migrations/
+vendor/
+.grok/
+AGENTS.md
+AGENTS.project.md
+startup.sh
+artifacts/
