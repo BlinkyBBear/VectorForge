@@ -14,15 +14,18 @@
 
 ## Quick start (Windows)
 
-### 1. Install Python 3.10+
+### 1. Install Python 3.10 – 3.12 (recommended)
 
-From [python.org](https://www.python.org/downloads/) — enable **“Add python.exe to PATH”** and **tcl/tk**.
+Python 3.14 is very new and currently causes hard crashes in the vectorizer on some systems.  
+**Use Python 3.11 or 3.12** for best stability: https://www.python.org/downloads/
+
+Enable **“Add python.exe to PATH”** and **tcl/tk** when installing.
 
 ### 2. Clone and install
 
 ```bat
-git clone https://github.com/YOUR_USER/vectorforge.git
-cd vectorforge
+git clone https://github.com/BlinkyBBear/VectorForge.git
+cd VectorForge
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -68,7 +71,7 @@ dist\VectorForge.exe
 
 ### First-run model download
 
-The first background-removal uses **rembg u2net** (~176 MB). It is cached under:
+The first background-removal uses **rembg u2net** (~176 MB). It is cached under:
 
 ```text
 %USERPROFILE%\.u2net\u2net.onnx
@@ -159,6 +162,13 @@ python -m vectorforge.cli input.png -o out.svg --preset logo --bg
 - Images always downsampled **before** rembg/vtracer when larger  
 - Flood-fill / wand / brush are **iterative** (queue + visited), never recursive  
 - Failed AI BG falls back to corner flood-fill  
+
+---
+
+## Known issue (Python 3.14)
+
+On Python 3.14 the `vtracer` native extension currently causes a hard process crash on some Windows systems when vectorizing. Background removal works correctly.  
+**Workaround:** use Python 3.11 or 3.12 until the upstream wheels are updated.
 
 ---
 
