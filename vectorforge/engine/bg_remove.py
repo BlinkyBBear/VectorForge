@@ -1,14 +1,15 @@
 """
-Background removal + click refinement (offline).
+Background removal + click refinement (offline) — v0.5.
 
-- Auto: rembg (U2Net) when available, else iterative corner flood-fill
-- Click wand / brush: iterative BFS (never recursive) for refine
+- rembg (U2Net) with strength control (alpha threshold + erode/dilate)
+- Iterative wand / brush (never recursive)
 """
 
 from __future__ import annotations
 
 from typing import Iterable
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -36,9 +37,18 @@ def auto_remove_background(
     *,
     prefer_ai: bool = True,
     tolerance: int = 36,
+    strength: float = 0.55,
 ) -> Image.Image:
-    """Isolate subject on transparent background."""
+    """
+    Isolate subject on transparent background.
+
+    strength 0–1:
+      low  → keep more edge fringe (gentler cut)
+      high → harder alpha cutoff + slight erode (tighter subject)
+    """
     rgba = img.convert("RGBA")
+    strength = float(np.clip(strength, 0.0, 1.0))
+
     if prefer_ai:
         rem = _get_rembg_remove()
         if rem is not None:
@@ -50,11 +60,43 @@ def auto_remove_background(
                     out = Image.open(BytesIO(out)).convert("RGBA")
                 else:
                     out = out.convert("RGBA")
-                return out
+                return _apply_alpha_strength(out, strength)
             except Exception:
                 pass
 
-    return _corner_flood_remove(rgba, tolerance=tolerance)
+    return _apply_alpha_strength(
+        _corner_flood_remove(rgba, tolerance=tolerance),
+        strength,
+    )
+
+
+def _apply_alpha_strength(img: Image.Image, strength: float) -> Image.Image:
+    """Harder strength → higher alpha cutoff + morphological erode on mask."""
+    arr = np.array(img.convert("RGBA"), dtype=np.uint8)
+    alpha = arr[:, :, 3].astype(np.float32)
+    # threshold: low strength keeps soft edges; high strength clips harder
+    cutoff = 20 + strength * 100  # 20–120
+    mask = (alpha >= cutoff).astype(np.uint8) * 255
+
+    # erode for high strength (tighter), dilate for low (keep fringe)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    if strength > 0.6:
+        iters = int(round((strength - 0.6) * 5))  # 0–2
+        if iters > 0:
+            mask = cv2.erode(mask, k, iterations=iters)
+    elif strength < 0.4:
+        iters = int(round((0.4 - strength) * 5))
+        if iters > 0:
+            mask = cv2.dilate(mask, k, iterations=iters)
+
+    # feather 1px for mid strength
+    if 0.35 < strength < 0.75:
+        mask = cv2.GaussianBlur(mask, (3, 3), 0)
+
+    arr[:, :, 3] = mask
+    # zero RGB where fully transparent (cleaner exports)
+    arr[mask < 8, 0:3] = 0
+    return Image.fromarray(arr, "RGBA")
 
 
 def _corner_flood_remove(img: Image.Image, tolerance: int = 36) -> Image.Image:

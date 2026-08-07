@@ -1,15 +1,15 @@
-"""Memory safety — downsample plans and hard limits (no OOM on huge photos)."""
+"""Memory / resolution limits — raised for v0.5 quality targets."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-DEFAULT_MAX_PROCESS_SIZE = 1800
-FAST_MAX_PROCESS_SIZE = 1200
-MAX_QUALITY_PROCESS_SIZE = 2000
-HARD_MAX_PROCESS_SIZE = 2000
-WARN_MEGAPIXELS = 12
-MAX_FILE_BYTES = 80 * 1024 * 1024
+DEFAULT_MAX_PROCESS_SIZE = 2800
+FAST_MAX_PROCESS_SIZE = 2000
+MAX_QUALITY_PROCESS_SIZE = 4800
+HARD_MAX_PROCESS_SIZE = 6000
+WARN_MEGAPIXELS = 20
+MAX_FILE_BYTES = 120 * 1024 * 1024
 
 
 @dataclass(frozen=True)

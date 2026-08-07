@@ -1,173 +1,122 @@
-# VectorForge
+# VectorForge v0.5
 
-**Offline desktop app** that converts any raster image into **laser-ready SVG** files.
+**Offline desktop app** — convert any raster image into **high-quality laser / CAD-ready SVG**.
 
-- **Background removal** (AI via [rembg](https://github.com/danielgatis/rembg) / U2Net, offline after model cache) + click wand / brush refine  
-- **High-quality vectorization** via [vtracer](https://github.com/visioncortex/vtracer) (Rust)  
-- **Memory-safe** downsampling (hard max 2000px long side)  
-- **Windows `.exe`** via PyInstaller  
-- Fully offline after install (no cloud APIs)
+Targets: **xTool Studio**, **Fusion 360**, **LightBurn**, **Inkscape**, Glowforge, OMTech, etc.
 
-> This repository is **desktop-first**. A legacy web prototype may exist under `src/`; it is **not** required to run VectorForge.
+| | |
+| --- | --- |
+| **Version** | 0.5.0 |
+| **Engine** | Edge-aware preprocess (OpenCV) → [vtracer](https://github.com/visioncortex/vtracer) |
+| **BG removal** | [rembg](https://github.com/danielgatis/rembg) u2net + wand/brush |
+| **Offline** | Yes, after first model download |
+| **Windows** | `scripts\build_windows.bat` → `dist\VectorForge.exe` |
+
+---
+
+## What’s new in v0.5
+
+- **Edge-aware preprocessing** before tracing (CLAHE, bilateral denoise, Canny boost, adaptive threshold for laser)
+- **Retuned presets** that actually differ (Laser Pro → Photorealistic Max)
+- **Full sidebar controls** for every major vtracer + preprocess parameter
+- **Pure B&W vs Colour Compound** mode toggle
+- **Max process size up to 6000px**
+- **BG strength** control + **live brush preview**
+- SVG sanitized for CAD import (`viewBox`, `fill-rule`, no scripts)
 
 ---
 
 ## Quick start (Windows)
 
-### 1. Install Python 3.10+
-
-From [python.org](https://www.python.org/downloads/) — enable **“Add python.exe to PATH”** and **tcl/tk**.
-
-### 2. Clone and install
-
 ```bat
-git clone https://github.com/YOUR_USER/vectorforge.git
-cd vectorforge
+git clone https://github.com/BlinkyBBear/VectorForge.git
+cd VectorForge
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-### 3. Run the desktop app
-
-```bat
 python -m vectorforge
 ```
 
-Or double-click `scripts\run_desktop.bat`.
-
-### 4. Headless CLI (no GUI)
-
-```bat
-python -m vectorforge.cli photo.png -o out.svg --preset photo --bg
-python -m vectorforge.cli logo.png  -o logo.svg --preset logo
-python -m vectorforge.cli cut.png   -o cut.svg  --preset laser --max-side 1200
-```
-
----
-
-## Build a Windows `.exe`
-
-On a **Windows** PC (recommended for a native `.exe`):
+### Build `.exe`
 
 ```bat
 scripts\build_windows.bat
 ```
 
-Or PowerShell:
+Output: `dist\VectorForge.exe`  
+First BG removal downloads `u2net.onnx` (~176 MB) into `%USERPROFILE%\.u2net\` — fully offline after that.
 
-```powershell
-.\scripts\build_windows.ps1
+### CLI
+
+```bat
+python -m vectorforge.cli logo.png  -o logo.svg  --preset logo
+python -m vectorforge.cli sign.png  -o cut.svg   --preset laser_pro --max-side 3200
+python -m vectorforge.cli photo.jpg -o photo.svg --preset photoreal --bg --bg-strength 0.6
+python -m vectorforge.cli engrave.jpg -o eng.svg --preset bw_compound
 ```
-
-Output:
-
-```text
-dist\VectorForge.exe
-```
-
-### First-run model download
-
-The first background-removal uses **rembg u2net** (~176 MB). It is cached under:
-
-```text
-%USERPROFILE%\.u2net\u2net.onnx
-```
-
-After that, the app runs **fully offline**. To pre-seed offline installs, copy `u2net.onnx` into that folder (or set env `U2NET_HOME` to a folder containing the file).
-
-### One-file notes
-
-- Antivirus may scan the first launch of a PyInstaller binary (normal for unsigned builds).  
-- For a **console debug** build, set `console=True` in `VectorForge.spec` and rebuild.
 
 ---
 
-## Quality presets
+## Presets (recommended settings)
 
-| Preset | Max side | Mode | Best for |
-| --- | --- | --- | --- |
-| **Logo / Line Art** (default) | 1800 | color spline | Icons, logos, line art |
-| **Illustration** | 1700 | color | Flat artwork |
-| **High Detail Photo** | 1800 | color | Photos / product shots |
-| **Laser Optimized** | 1200 | binary | Cut-ready B&W, fewer islands |
-| **Maximum Quality** | 2000 | color | Experimental fidelity |
+| Preset | Best for | Tips |
+| --- | --- | --- |
+| **Laser Pro** | Cut paths, solid black fills | High contrast source; raise **Edge strength**; lower **Filter speckle** for thin lines |
+| **Logo / Line Art** | Icons, signs, brand marks | Default for most logos; keep process size ≥ 2800 if source is large |
+| **Illustration Colour** | Flat colour art | Increase **Layer difference** if colours muddy |
+| **High Detail Photo** | Product shots, portraits | Use BG remove first; 24+ effective colours via color precision 8 |
+| **Photorealistic Max** | Max detail → CAD | Slow; max side 4000–4800; filter_speckle=1 |
+| **B&W Compound** | Engrave tonal layers | Adjust compound levels via re-running with contrast |
 
----
+### Logos & signs
 
-## Workflow
+1. Prefer **Logo / Line Art** or **Laser Pro**  
+2. Optional: Auto remove BG → erase remaining fringe  
+3. Max process **2800–4000**  
+4. Export SVG → open in xTool / LightBurn as **fill** (engrave) or **line** (cut)
 
-1. **Open** image (JPEG, PNG, WebP, BMP, TIFF, GIF, …)  
-2. **Auto remove background** (optional) → click **Erase / Restore / Brush** to refine  
-3. Choose a **quality preset**  
-4. **Vectorize**  
-5. **Export SVG** → open in LightBurn, Inkscape, Illustrator, LaserGRBL, etc.
+### Photographs
+
+1. **High Detail Photo** or **Photorealistic Max**  
+2. BG remove with strength ~0.5–0.7  
+3. Colour mode **Colour**  
+4. Expect multi-layer stacked paths (hierarchical)
 
 ---
 
 ## Project layout
 
 ```text
-main.py                 # entry for PyInstaller
-vectorforge/            # Python package
-  __main__.py           # python -m vectorforge  → GUI
-  cli.py                # headless convert
-  engine/               # memory, bg remove, vtracer wrapper, presets
-  ui/app.py             # CustomTkinter desktop UI
-requirements.txt
-VectorForge.spec        # PyInstaller one-file Windows build
-scripts/
-  build_windows.bat
-  build_windows.ps1
-  run_desktop.bat
-prompts/                # product prompt history
-LICENSE                 # MIT
+vectorforge/
+  engine/
+    preprocess.py   # edge-aware pipeline (v0.5)
+    vectorize.py    # vtracer + SVG sanitize
+    bg_remove.py    # rembg + wand/brush
+    presets.py
+    memory.py
+  ui/app.py         # CustomTkinter desktop UI
+  cli.py
+main.py
+VectorForge.spec
+scripts/build_windows.bat
+prompts/
+tests/
 ```
 
 ---
 
-## Linux / macOS
+## Dependencies
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-# GUI needs Tk (python.org macOS build includes it; Linux: install python3-tk)
-python -m vectorforge
-# always available:
-python -m vectorforge.cli input.png -o out.svg --preset logo --bg
-```
-
----
-
-## Dependencies (why)
-
-| Library | Role |
+| Package | Role |
 | --- | --- |
-| **CustomTkinter** | Modern offline desktop UI |
-| **Pillow** | Image load, EXIF, downsample |
-| **numpy** | Iterative flood-fill / wand (no recursion) |
-| **rembg + onnxruntime** | Offline subject cutout |
-| **vtracer** | High-quality path tracing (Rust) |
-| **PyInstaller** | Windows `.exe` packaging |
-
----
-
-## Safety
-
-- Max process long side **2000px** (hard cap)  
-- Images always downsampled **before** rembg/vtracer when larger  
-- Flood-fill / wand / brush are **iterative** (queue + visited), never recursive  
-- Failed AI BG falls back to corner flood-fill  
+| customtkinter | Desktop UI |
+| Pillow / numpy / opencv-python-headless | Load + edge preprocess |
+| vtracer | Path tracing (Rust) |
+| rembg[cpu] | Offline subject cutout |
+| pyinstaller | Windows `.exe` |
 
 ---
 
 ## License
 
 MIT — see [LICENSE](./LICENSE). You own every exported SVG.
-
----
-
-## Prompt history
-
-Major product prompts live in [`prompts/`](./prompts/) for version history when you push to your own GitHub.

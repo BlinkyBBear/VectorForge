@@ -1,21 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for VectorForge Windows .exe (and other platforms).
-# Build on Windows for a native .exe:
-#   pyinstaller VectorForge.spec
-#
-# First-run rembg model downloads to %USERPROFILE%\.u2net\ (or U2NET_HOME).
-# To fully offline-bundle the model, place u2net.onnx next to the exe and set
-# U2NET_HOME in the runtime hook (optional — see scripts/hooks).
-
-import sys
-from pathlib import Path
+# VectorForge v0.5 — PyInstaller one-file Windows build
+#   pyinstaller --noconfirm VectorForge.spec
 
 block_cipher = None
-root = Path(SPECPATH)
 
 a = Analysis(
     ['main.py'],
-    pathex=[str(root)],
+    pathex=[],
     binaries=[],
     datas=[],
     hiddenimports=[
@@ -24,10 +15,18 @@ a = Analysis(
         'rembg.sessions',
         'rembg.sessions.u2net',
         'onnxruntime',
+        'cv2',
+        'numpy',
         'PIL._tkinter_finder',
         'customtkinter',
         'vectorforge',
         'vectorforge.engine',
+        'vectorforge.engine.preprocess',
+        'vectorforge.engine.vectorize',
+        'vectorforge.engine.bg_remove',
+        'vectorforge.engine.presets',
+        'vectorforge.engine.memory',
+        'vectorforge.engine.image_ops',
         'vectorforge.ui',
         'vectorforge.ui.app',
         'vectorforge.cli',
@@ -42,17 +41,20 @@ a = Analysis(
     noarchive=False,
 )
 
-# Bundle customtkinter assets
 try:
-    import customtkinter
     from PyInstaller.utils.hooks import collect_all
-
     tmp_ret = collect_all('customtkinter')
     a.datas += tmp_ret[0]
     a.binaries += tmp_ret[1]
     a.hiddenimports += tmp_ret[2]
 except Exception as e:
     print('warn: customtkinter collect_all failed', e)
+
+try:
+    from PyInstaller.utils.hooks import collect_dynamic_libs
+    a.binaries += collect_dynamic_libs('cv2')
+except Exception as e:
+    print('warn: cv2 libs collect failed', e)
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -70,7 +72,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # windowed app; use console=True for debug builds
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
