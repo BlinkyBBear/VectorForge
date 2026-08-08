@@ -216,6 +216,9 @@ class VectorForgeApp(ctk.CTk):
         self.opttolerance, _ = self._slider(
             self._potrace_frame, "Curve optimize", 0.05, 1.0, 0.60
         )
+        self.extra_simplify, _ = self._slider(
+            self._potrace_frame, "Extra simplify (post-trace)", 0, 1, 0.15
+        )
         self.stroke_width, _ = self._slider(
             self._potrace_frame, "Stroke width", 0.25, 4, 1.0
         )
@@ -514,6 +517,8 @@ class VectorForgeApp(ctk.CTk):
         self.turdsize.set(p.get("turdsize", 14))
         self.alphamax.set(p.get("alphamax", 0.65))
         self.opttolerance.set(p.get("opttolerance", 0.60))
+        if hasattr(self, "extra_simplify"):
+            self.extra_simplify.set(float(p.get("extra_simplify", 0.15)))
         self.stroke_width.set(p.get("stroke_width", 1.0))
         if hasattr(self, "min_branch_len"):
             self.min_branch_len.set(p.get("min_branch_len", 10))
@@ -581,6 +586,7 @@ class VectorForgeApp(ctk.CTk):
                 "blacklevel": 0.50,
                 "threshold_method": "otsu",
                 "alphamax": 0.65,
+                "extra_simplify": 0.15,
                 "stroke_width": 1.0,
                 "invert": False,
                 "max_process_size": 3600,
@@ -599,6 +605,7 @@ class VectorForgeApp(ctk.CTk):
                 "turdsize": int(round(self.turdsize.get())),
                 "alphamax": float(self.alphamax.get()),
                 "opttolerance": float(self.opttolerance.get()),
+                "extra_simplify": float(self.extra_simplify.get()),
                 "stroke_width": float(self.stroke_width.get()),
                 "filter_speckle": int(round(self.filter_speckle.get())),
                 "color_precision": int(round(self.color_precision.get())),
@@ -1027,11 +1034,20 @@ class VectorForgeApp(ctk.CTk):
                 tip = getattr(result, "quality_tip", "") or ""
                 hp = result.params.get("highpass_radius", "?")
                 sf = result.params.get("scale_factor", "?")
+                nb = result.params.get("nodes_before_simplify")
+                na = result.params.get("nodes_after_simplify")
+                es = result.params.get("extra_simplify", 0)
+                auto_s = result.params.get("simplify_auto", False)
+                simp_line = ""
+                if nb is not None and na is not None and (nb != na or es):
+                    tag = "auto" if auto_s else f"s={es}"
+                    simp_line = f"simplify {nb}->{na} nodes ({tag})\n"
                 self.stats.configure(
                     text=(
                         f"paths: {result.path_count}  nodes~{result.node_estimate}\n"
                         f"engine: {result.engine}  {result.process_label}\n"
                         f"hp={hp} scale={sf}\n"
+                        f"{simp_line}"
                         f"{tip}\n"
                         f"{result.duration_ms} ms · {preset}"
                     )

@@ -243,3 +243,31 @@ class MaskPreviewTests(unittest.TestCase):
         self.assertIsNotNone(mask)
         self.assertIn("scale_factor", meta)
         self.assertEqual(mask.mode, "RGB")
+
+
+class PathSimplifyTests(unittest.TestCase):
+    def test_keeps_closed_and_reduces_nodes(self) -> None:
+        from vectorforge.engine.path_simplify import simplify_svg_paths
+        from vectorforge.engine.quality_check import analyze_svg_quality
+
+        dense = "M0,0 " + " ".join(f"L{i},{0.02 * (i % 4)}" for i in range(1, 120)) + " L120,40 L0,40 Z"
+        hole = "M30,15 L50,15 L50,25 L30,25 Z"
+        svg = (
+            f'<?xml version="1.0"?><svg viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg">'
+            f'<path d="{dense}" fill="none" stroke="#000"/>'
+            f'<path d="{hole}" fill="none" stroke="#000"/></svg>'
+        )
+        out, st = simplify_svg_paths(svg, 0.4, auto_if_dense=False)
+        q = analyze_svg_quality(out)
+        self.assertEqual(q.path_count, 2)
+        self.assertEqual(q.open_count, 0)
+        self.assertLess(st.nodes_after, st.nodes_before)
+        self.assertIn("Laser-ready", q.tip)
+
+    def test_auto_dense(self) -> None:
+        from vectorforge.engine.path_simplify import simplify_svg_paths
+        dense = "M0,0 " + " ".join(f"L{i},0" for i in range(1, 200)) + " L200,1 L0,1 Z"
+        svg = f'<svg viewBox="0 0 200 2"><path d="{dense}"/></svg>'
+        out, st = simplify_svg_paths(svg, 0.0, auto_if_dense=True, dense_nodes_per_path=50)
+        self.assertTrue(st.auto)
+        self.assertLess(st.nodes_after, st.nodes_before)

@@ -32,6 +32,8 @@ PRESETS: dict[str, dict[str, Any]] = {
             "invert": False,
             "detail": 0.8,
             "simplify_strength": 0.35,
+            "extra_simplify": 0.20,
+            "auto_extra_simplify": True,
         },
     },
     "laser_pro": {
@@ -78,6 +80,7 @@ PRESETS: dict[str, dict[str, Any]] = {
             "invert": False,
             "detail": 0.9,
             "simplify_strength": 0.15,
+            "extra_simplify": 0.10,
         },
     },
     "colour": {

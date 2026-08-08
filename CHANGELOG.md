@@ -1,6 +1,13 @@
 # Changelog
 
-## [1.0.4] — 2026-08-08
+## [1.0.5] — 2026-08-08
+
+### Added
+- **Extra simplify** post-trace pass (Inkscape Path→Simplify style) for CNC/LightBurn/Fusion
+- Advanced slider 0–1; auto light simplify when node density is very high
+- Closed-path RDP that never opens cut paths or drops letter counters
+
+[1.0.4] — 2026-08-08
 
 ### Added
 - **Preview mask** — refresh Binary mask from Raster prep only (no Potrace/vtracer)

@@ -30,6 +30,7 @@ from .preprocess import (
 )
 from .presets import DEFAULT_PRESET_ID, apply_preset
 from .quality_check import QualityReport, analyze_svg_quality
+from .path_simplify import simplify_svg_paths
 
 ProgressCb = Callable[[str, float], None]
 
@@ -248,6 +249,23 @@ def vectorize_image(
     if m:
         w, h = int(float(m.group(1))), int(float(m.group(2)))
     svg = _sanitize_svg(svg, width=w, height=h)
+
+    # Extra post-trace simplify (Inkscape Path→Simplify). Never opens closed cut paths.
+    report("Simplify paths", 0.93)
+    extra_s = float(vt.get("extra_simplify", 0.0) or 0.0)
+    # Centerline already RDP-simplified; keep extra light only if user asked
+    is_cl = str(vt.get("engine", engine)).lower() in ("centerline", "skeleton", "centreline")
+    svg, simp = simplify_svg_paths(
+        svg,
+        strength=extra_s,
+        auto_if_dense=(not is_cl) and bool(vt.get("auto_extra_simplify", True)),
+        dense_nodes_per_path=float(vt.get("dense_nodes_per_path", 90.0)),
+        auto_strength=float(vt.get("auto_simplify_strength", 0.18)),
+    )
+    vt["extra_simplify"] = simp.strength if simp.auto else extra_s
+    vt["simplify_auto"] = simp.auto
+    vt["nodes_before_simplify"] = simp.nodes_before
+    vt["nodes_after_simplify"] = simp.nodes_after
 
     meta = (
         f"<!-- VectorForge {__version__} | preset={params.preset_id} "
