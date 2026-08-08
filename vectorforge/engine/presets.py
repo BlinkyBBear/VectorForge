@@ -1,99 +1,117 @@
-"""v0.5 quality presets — tuned for laser / CAD quality targets."""
+"""VectorForge v1.0 presets — CNC outline quality first."""
 
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
 
-from .memory import (
-    DEFAULT_MAX_PROCESS_SIZE,
-    FAST_MAX_PROCESS_SIZE,
-    MAX_QUALITY_PROCESS_SIZE,
-)
+from .memory import DEFAULT_MAX_PROCESS_SIZE, MAX_QUALITY_PROCESS_SIZE
 
-DEFAULT_PRESET_ID = "logo"
+DEFAULT_PRESET_ID = "cnc_outline"
 
-# Each preset: UI label/description + full pipeline params
 PRESETS: dict[str, dict[str, Any]] = {
+    "cnc_outline": {
+        "label": "CNC Outline",
+        "description": "Pure closed outlines for plasma/router/laser cut-outs. Potrace, stroke-only.",
+        "params": {
+            "engine": "potrace",
+            "output_style": "outline",
+            "color_mode": "outline",
+            "threshold_method": "otsu",
+            "blacklevel": 0.5,
+            "denoise": 0.22,
+            "contrast": 0.30,
+            "edge_strength": 0.35,
+            "turdsize": 2,
+            "alphamax": 1.0,
+            "opttolerance": 0.2,
+            "opticurve": True,
+            "turnpolicy": "minority",
+            "stroke_width": 1.0,
+            "max_process_size": 3600,
+            "invert": False,
+            "detail": 0.9,
+            "simplify_strength": 0.15,
+        },
+    },
     "laser_pro": {
         "label": "Laser Pro",
-        "description": "Tightest clean black fills for cutting. Adaptive threshold + morphology.",
+        "description": "Tight solid black fills (evenodd holes) via Potrace.",
         "params": {
-            "colormode": "binary",
-            "hierarchical": "stacked",
-            "mode": "spline",
-            "filter_speckle": 6,
-            "color_precision": 6,
-            "layer_difference": 16,
-            "corner_threshold": 50,
-            "length_threshold": 3.5,
-            "max_iterations": 12,
-            "splice_threshold": 40,
-            "path_precision": 3,
-            "max_process_size": 2800,
-            "preprocess_mode": "laser_bw",
-            "edge_strength": 0.7,
-            "denoise": 0.4,
-            "contrast": 0.65,
-            "threshold_bias": 0.45,
+            "engine": "potrace",
+            "output_style": "fill",
+            "color_mode": "bw",
+            "threshold_method": "otsu",
+            "blacklevel": 0.5,
+            "denoise": 0.28,
+            "contrast": 0.35,
+            "edge_strength": 0.4,
+            "turdsize": 3,
+            "alphamax": 1.0,
+            "opttolerance": 0.22,
+            "opticurve": True,
+            "turnpolicy": "minority",
+            "max_process_size": 3200,
             "invert": False,
-            "color_compound": False,
+            "detail": 0.85,
+            "simplify_strength": 0.2,
         },
     },
     "logo": {
         "label": "Logo / Line Art",
-        "description": "High-detail solid shapes, sharp corners, clean outer/inner edges.",
+        "description": "High-fidelity solid logos and signs. Potrace, sharp corners.",
         "params": {
-            "colormode": "color",
-            "hierarchical": "stacked",
-            "mode": "spline",
-            "filter_speckle": 3,
-            "color_precision": 7,
-            "layer_difference": 12,
-            "corner_threshold": 40,
-            "length_threshold": 3.0,
-            "max_iterations": 12,
-            "splice_threshold": 35,
-            "path_precision": 3,
-            "max_process_size": 3200,
-            "preprocess_mode": "logo",
-            "edge_strength": 0.75,
-            "denoise": 0.25,
-            "contrast": 0.7,
-            "threshold_bias": 0.5,
+            "engine": "potrace",
+            "output_style": "fill",
+            "color_mode": "bw",
+            "threshold_method": "otsu",
+            "blacklevel": 0.48,
+            "denoise": 0.18,
+            "contrast": 0.28,
+            "edge_strength": 0.45,
+            "turdsize": 1,
+            "alphamax": 0.95,
+            "opttolerance": 0.15,
+            "opticurve": True,
+            "turnpolicy": "minority",
+            "max_process_size": 4000,
             "invert": False,
-            "color_compound": True,
+            "detail": 0.95,
+            "simplify_strength": 0.1,
         },
     },
-    "illustration": {
-        "label": "Illustration Colour",
-        "description": "Flat colour artwork with coherent regions and smooth boundaries.",
+    "colour": {
+        "label": "Colour Compound",
+        "description": "Multi-colour stacked layers (vtracer) for fills / vinyl / engraving colour.",
         "params": {
+            "engine": "vtracer",
+            "output_style": "fill",
+            "color_mode": "color",
             "colormode": "color",
             "hierarchical": "stacked",
             "mode": "spline",
-            "filter_speckle": 5,
+            "filter_speckle": 4,
             "color_precision": 6,
             "layer_difference": 14,
             "corner_threshold": 50,
             "length_threshold": 3.5,
-            "max_iterations": 11,
+            "max_iterations": 12,
             "splice_threshold": 40,
             "path_precision": 3,
+            "denoise": 0.35,
+            "contrast": 0.45,
+            "edge_strength": 0.4,
             "max_process_size": 2800,
-            "preprocess_mode": "illustration",
-            "edge_strength": 0.5,
-            "denoise": 0.45,
-            "contrast": 0.55,
-            "threshold_bias": 0.5,
             "invert": False,
-            "color_compound": True,
         },
     },
     "photo": {
         "label": "High Detail Photo",
-        "description": "Photos with strong structure retained — good for multi-layer colour.",
+        "description": "Photographic detail with colour layers (vtracer).",
         "params": {
+            "engine": "vtracer",
+            "output_style": "fill",
+            "color_mode": "color",
             "colormode": "color",
             "hierarchical": "stacked",
             "mode": "spline",
@@ -105,20 +123,20 @@ PRESETS: dict[str, dict[str, Any]] = {
             "max_iterations": 14,
             "splice_threshold": 35,
             "path_precision": 3,
+            "denoise": 0.28,
+            "contrast": 0.5,
+            "edge_strength": 0.4,
             "max_process_size": 3600,
-            "preprocess_mode": "photo",
-            "edge_strength": 0.45,
-            "denoise": 0.3,
-            "contrast": 0.55,
-            "threshold_bias": 0.5,
             "invert": False,
-            "color_compound": True,
         },
     },
     "photoreal": {
         "label": "Photorealistic Max",
-        "description": "Maximum nodes/detail for CAD import. Slow, high fidelity.",
+        "description": "Maximum colour fidelity — slow, high node count.",
         "params": {
+            "engine": "vtracer",
+            "output_style": "fill",
+            "color_mode": "color",
             "colormode": "color",
             "hierarchical": "stacked",
             "mode": "spline",
@@ -130,83 +148,49 @@ PRESETS: dict[str, dict[str, Any]] = {
             "max_iterations": 16,
             "splice_threshold": 30,
             "path_precision": 3,
-            "max_process_size": MAX_QUALITY_PROCESS_SIZE,
-            "preprocess_mode": "photoreal",
-            "edge_strength": 0.35,
             "denoise": 0.15,
-            "contrast": 0.5,
-            "threshold_bias": 0.5,
+            "contrast": 0.45,
+            "edge_strength": 0.35,
+            "max_process_size": MAX_QUALITY_PROCESS_SIZE,
             "invert": False,
-            "color_compound": True,
-        },
-    },
-    "bw_compound": {
-        "label": "B&W Compound",
-        "description": "Tonal gray layers for engraving depth (LightBurn / xTool).",
-        "params": {
-            "colormode": "color",  # multi-gray layers
-            "hierarchical": "stacked",
-            "mode": "spline",
-            "filter_speckle": 4,
-            "color_precision": 6,
-            "layer_difference": 12,
-            "corner_threshold": 45,
-            "length_threshold": 3.2,
-            "max_iterations": 12,
-            "splice_threshold": 38,
-            "path_precision": 3,
-            "max_process_size": 3000,
-            "preprocess_mode": "bw_compound",
-            "compound_levels": 6,
-            "edge_strength": 0.5,
-            "denoise": 0.35,
-            "contrast": 0.6,
-            "threshold_bias": 0.5,
-            "invert": False,
-            "color_compound": True,
         },
     },
 }
 
-# Back-compat aliases
+# aliases
+PRESETS["illustration"] = PRESETS["colour"]
 PRESETS["laser"] = PRESETS["laser_pro"]
 PRESETS["max"] = PRESETS["photoreal"]
+PRESETS["bw_compound"] = {
+    "label": "B&W Compound",
+    "description": "Tonal gray layers for engraving depth.",
+    "params": {
+        **PRESETS["colour"]["params"],
+        "preprocess_mode": "bw_compound",
+        "compound_levels": 6,
+        "engine": "vtracer",
+    },
+}
 
 
-def apply_preset(
-    preset_id: str,
-    overrides: dict[str, Any] | None = None,
-    *,
-    auto_tune: bool = False,
-) -> dict[str, Any]:
-    """
-    Merge preset + overrides.
-
-    auto_tune=False (default): respect explicit filter_speckle / thresholds.
-    auto_tune=True: lightly map detail/simplify_strength if provided.
-    """
+def apply_preset(preset_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     base = PRESETS.get(preset_id) or PRESETS[DEFAULT_PRESET_ID]
     params = deepcopy(base["params"])
     if overrides:
-        # Ignore None values so UI can pass partials
         for k, v in overrides.items():
             if v is not None:
                 params[k] = v
-
-    if auto_tune and ("detail" in params or "simplify_strength" in params):
-        detail = float(params.get("detail", 0.85))
-        strength = float(params.get("simplify_strength", 0.2))
-        # Only nudge — do not destroy preset intent
-        base_speckle = int(params.get("filter_speckle", 4))
-        params["filter_speckle"] = max(
-            1, min(20, int(round(base_speckle + (1 - detail) * 4 + strength * 3)))
-        )
-        params["length_threshold"] = max(
-            2.0,
-            float(params.get("length_threshold", 3.5))
-            + (1 - detail) * 1.5
-            + strength * 1.0,
-        )
+    # Colour mode toggle overrides
+    cm = str(params.get("color_mode", "")).lower()
+    if cm in ("outline", "outline-only", "cnc"):
+        params["engine"] = "potrace"
+        params["output_style"] = "outline"
+    elif cm in ("bw", "binary", "pure_bw", "blackwhite"):
+        params["engine"] = "potrace"
+        params["output_style"] = params.get("output_style") or "fill"
+    elif cm in ("color", "colour", "compound"):
+        params["engine"] = "vtracer"
+        params["colormode"] = "color"
 
     params["max_process_size"] = int(
         params.get("max_process_size", DEFAULT_MAX_PROCESS_SIZE)
@@ -215,13 +199,12 @@ def apply_preset(
 
 
 def preset_choices() -> list[tuple[str, str]]:
-    """Stable ordered list of (id, label) for UI — unique ids only."""
     order = [
+        "cnc_outline",
         "laser_pro",
         "logo",
-        "illustration",
+        "colour",
         "photo",
         "photoreal",
-        "bw_compound",
     ]
     return [(k, PRESETS[k]["label"]) for k in order if k in PRESETS]

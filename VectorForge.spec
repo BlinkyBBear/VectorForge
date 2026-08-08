@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# VectorForge v0.5 — PyInstaller one-file Windows build
+# VectorForge v1.0 — PyInstaller one-file Windows build
 #   pyinstaller --noconfirm VectorForge.spec
 
 block_cipher = None
@@ -10,6 +10,8 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=[
+        'potrace',
+        'potrace.potrace',
         'vtracer',
         'rembg',
         'rembg.sessions',
@@ -22,11 +24,14 @@ a = Analysis(
         'vectorforge',
         'vectorforge.engine',
         'vectorforge.engine.preprocess',
+        'vectorforge.engine.potrace_engine',
         'vectorforge.engine.vectorize',
         'vectorforge.engine.bg_remove',
         'vectorforge.engine.presets',
         'vectorforge.engine.memory',
         'vectorforge.engine.image_ops',
+        'vectorforge.engine.dxf_export',
+        'vectorforge.engine.svg_render',
         'vectorforge.ui',
         'vectorforge.ui.app',
         'vectorforge.cli',

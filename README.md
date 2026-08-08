@@ -1,28 +1,38 @@
-# VectorForge v0.5
+# VectorForge v1.0
 
-**Offline desktop app** — convert any raster image into **high-quality laser / CAD-ready SVG**.
-
-Targets: **xTool Studio**, **Fusion 360**, **LightBurn**, **Inkscape**, Glowforge, OMTech, etc.
+**Offline Windows desktop app** — convert raster images into **clean, cut-ready SVG + DXF** for CNC sheet-metal, plasma, laser, and CAD.
 
 | | |
 | --- | --- |
-| **Version** | 0.5.0 |
-| **Engine** | Edge-aware preprocess (OpenCV) → [vtracer](https://github.com/visioncortex/vtracer) |
-| **BG removal** | [rembg](https://github.com/danielgatis/rembg) u2net + wand/brush |
-| **Offline** | Yes, after first model download |
-| **Windows** | `scripts\build_windows.bat` → `dist\VectorForge.exe` |
+| **Version** | 1.0.0 |
+| **Primary engine** | **Potrace** (CNC Outline / Logo / Laser B&W) |
+| **Colour engine** | [vtracer](https://github.com/visioncortex/vtracer) |
+| **BG removal** | rembg (u2net) + wand/brush |
+| **Export** | SVG + DXF |
+| **Offline** | After first model download |
+
+**Repo:** [github.com/BlinkyBBear/VectorForge](https://github.com/BlinkyBBear/VectorForge)
 
 ---
 
-## What’s new in v0.5
+## Why v1.0 (not a v0.5 patch)
 
-- **Edge-aware preprocessing** before tracing (CLAHE, bilateral denoise, Canny boost, adaptive threshold for laser)
-- **Retuned presets** that actually differ (Laser Pro → Photorealistic Max)
-- **Full sidebar controls** for every major vtracer + preprocess parameter
-- **Pure B&W vs Colour Compound** mode toggle
-- **Max process size up to 6000px**
-- **BG strength** control + **live brush preview**
-- SVG sanitized for CAD import (`viewBox`, `fill-rule`, no scripts)
+v0.5 used aggressive dual-threshold preprocessing that often flooded logos.  
+v1.0 is rebuilt for **geometric fidelity**:
+
+1. **Potrace-first** for solid high-contrast art (same class of algorithm as Inkscape Trace Bitmap / Super Vectorizer-style logo work)
+2. **Single Otsu / fixed / adaptive** threshold — no flood-to-black merge
+3. **Live preview of actual path geometry** after Vectorize
+4. **DXF export** for CNC / Fusion 360
+
+### Acceptance (Kelpie-style sign)
+
+High-contrast diamond “ON BOARD” style logo → **CNC Outline**:
+
+- Closed stroke paths
+- Outer diamond as a clean closed contour
+- Internal figures as separate closed paths
+- Export SVG/DXF → cut with minimal node editing
 
 ---
 
@@ -31,6 +41,7 @@ Targets: **xTool Studio**, **Fusion 360**, **LightBurn**, **Inkscape**, Glowforg
 ```bat
 git clone https://github.com/BlinkyBBear/VectorForge.git
 cd VectorForge
+git checkout v1.0
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -43,44 +54,54 @@ python -m vectorforge
 scripts\build_windows.bat
 ```
 
-Output: `dist\VectorForge.exe`  
-First BG removal downloads `u2net.onnx` (~176 MB) into `%USERPROFILE%\.u2net\` — fully offline after that.
+→ `dist\VectorForge.exe`  
+First BG removal downloads `u2net.onnx` (~176 MB) into `%USERPROFILE%\.u2net\`.
 
 ### CLI
 
 ```bat
-python -m vectorforge.cli logo.png  -o logo.svg  --preset logo
-python -m vectorforge.cli sign.png  -o cut.svg   --preset laser_pro --max-side 3200
-python -m vectorforge.cli photo.jpg -o photo.svg --preset photoreal --bg --bg-strength 0.6
-python -m vectorforge.cli engrave.jpg -o eng.svg --preset bw_compound
+python -m vectorforge.cli sign.png -o cut.svg --dxf cut.dxf --preset cnc_outline
+python -m vectorforge.cli logo.png -o logo.svg --preset logo
+python -m vectorforge.cli photo.jpg -o photo.svg --preset photo --bg
 ```
 
 ---
 
-## Presets (recommended settings)
+## Presets
 
-| Preset | Best for | Tips |
+| Preset | Engine | Use for |
 | --- | --- | --- |
-| **Laser Pro** | Cut paths, solid black fills | High contrast source; raise **Edge strength**; lower **Filter speckle** for thin lines |
-| **Logo / Line Art** | Icons, signs, brand marks | Default for most logos; keep process size ≥ 2800 if source is large |
-| **Illustration Colour** | Flat colour art | Increase **Layer difference** if colours muddy |
-| **High Detail Photo** | Product shots, portraits | Use BG remove first; 24+ effective colours via color precision 8 |
-| **Photorealistic Max** | Max detail → CAD | Slow; max side 4000–4800; filter_speckle=1 |
-| **B&W Compound** | Engrave tonal layers | Adjust compound levels via re-running with contrast |
+| **CNC Outline** (default) | Potrace stroke | Plasma / router / laser cut-outs |
+| **Laser Pro** | Potrace fill | Solid black fills + holes |
+| **Logo / Line Art** | Potrace fill | Sharp brand marks & signs |
+| **Colour Compound** | vtracer | Multi-colour stacked layers |
+| **High Detail Photo** | vtracer | Photos |
+| **Photorealistic Max** | vtracer | Max fidelity (slow) |
 
-### Logos & signs
+### Colour mode toggle
 
-1. Prefer **Logo / Line Art** or **Laser Pro**  
-2. Optional: Auto remove BG → erase remaining fringe  
-3. Max process **2800–4000**  
-4. Export SVG → open in xTool / LightBurn as **fill** (engrave) or **line** (cut)
+- **Outline-only** — stroke paths (CNC)
+- **Pure B&W** — filled black evenodd
+- **Colour** — vtracer compound
 
-### Photographs
+---
 
-1. **High Detail Photo** or **Photorealistic Max**  
-2. BG remove with strength ~0.5–0.7  
-3. Colour mode **Colour**  
-4. Expect multi-layer stacked paths (hierarchical)
+## Workflow (CNC cut-out)
+
+1. Open a high-contrast logo or sign (or remove background first)
+2. Preset **CNC Outline**
+3. Adjust **Black level** / **Denoise** only if edges look soft
+4. **Vectorize** → preview switches to **Vector paths** (real geometry)
+5. **Export SVG** and/or **Export DXF**
+6. Import into Fusion 360 / SheetCam / LightBurn / xTool
+
+### Tips for best outline quality
+
+- Prefer PNG or high-quality JPEG; avoid heavy compression artifacts
+- High contrast (dark art on light bg) works best
+- Raise max process size to 3000–5000 for large signs
+- If the image is light-on-dark, enable **Invert ink**
+- Lower **Turd size** to keep tiny holes; raise it to kill speckles
 
 ---
 
@@ -89,34 +110,24 @@ python -m vectorforge.cli engrave.jpg -o eng.svg --preset bw_compound
 ```text
 vectorforge/
   engine/
-    preprocess.py   # edge-aware pipeline (v0.5)
-    vectorize.py    # vtracer + SVG sanitize
-    bg_remove.py    # rembg + wand/brush
+    preprocess.py      # clean threshold (no flood)
+    potrace_engine.py  # CNC / logo / B&W
+    vectorize.py       # orchestrator
+    svg_render.py      # live path preview
+    dxf_export.py      # DXF for CAD/CNC
+    bg_remove.py
     presets.py
-    memory.py
-  ui/app.py         # CustomTkinter desktop UI
+  ui/app.py            # CustomTkinter UI
   cli.py
 main.py
 VectorForge.spec
 scripts/build_windows.bat
-prompts/
 tests/
+prompts/
 ```
-
----
-
-## Dependencies
-
-| Package | Role |
-| --- | --- |
-| customtkinter | Desktop UI |
-| Pillow / numpy / opencv-python-headless | Load + edge preprocess |
-| vtracer | Path tracing (Rust) |
-| rembg[cpu] | Offline subject cutout |
-| pyinstaller | Windows `.exe` |
 
 ---
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). You own every exported SVG.
+MIT — see [LICENSE](./LICENSE). You own every exported file.

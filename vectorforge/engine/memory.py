@@ -1,15 +1,15 @@
-"""Memory / resolution limits — raised for v0.5 quality targets."""
+"""Resolution limits — v1.0 allows up to 6000px for quality."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-DEFAULT_MAX_PROCESS_SIZE = 2800
-FAST_MAX_PROCESS_SIZE = 2000
+DEFAULT_MAX_PROCESS_SIZE = 3600
+FAST_MAX_PROCESS_SIZE = 2400
 MAX_QUALITY_PROCESS_SIZE = 4800
 HARD_MAX_PROCESS_SIZE = 6000
-WARN_MEGAPIXELS = 20
-MAX_FILE_BYTES = 120 * 1024 * 1024
+WARN_MEGAPIXELS = 24
+MAX_FILE_BYTES = 150 * 1024 * 1024
 
 
 @dataclass(frozen=True)

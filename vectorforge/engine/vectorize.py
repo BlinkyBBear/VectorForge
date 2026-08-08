@@ -1,7 +1,8 @@
 """
-High-quality vectorization pipeline (v0.5).
+VectorForge v1.0 pipeline.
 
-preprocess (edge-aware) → vtracer → SVG sanitize for CAD/laser tools.
+CNC / Logo / B&W → preprocess → Potrace
+Colour / Photo    → preprocess → vtracer
 """
 
 from __future__ import annotations
@@ -15,10 +16,18 @@ from typing import Any, Callable
 
 from PIL import Image
 
+from vectorforge import __version__
+
 from .image_ops import downsample_image
 from .memory import clamp_process_size
-from .preprocess import preprocess_for_vectorize, describe_preprocess
-from .presets import apply_preset, DEFAULT_PRESET_ID
+from .potrace_engine import potrace_binary_to_svg, potrace_params_from_ui
+from .preprocess import (
+    describe_preprocess,
+    preprocess_binary_for_potrace,
+    preprocess_bw_compound,
+    preprocess_color_for_vtracer,
+)
+from .presets import DEFAULT_PRESET_ID, apply_preset
 
 ProgressCb = Callable[[str, float], None]
 
@@ -26,7 +35,7 @@ ProgressCb = Callable[[str, float], None]
 @dataclass
 class VectorizeParams:
     preset_id: str = DEFAULT_PRESET_ID
-    max_process_size: int = 2800
+    max_process_size: int = 3600
     overrides: dict[str, Any] = field(default_factory=dict)
 
 
@@ -42,6 +51,8 @@ class VectorResult:
     params: dict[str, Any]
     warning: str | None = None
     preprocess_note: str = ""
+    preview_png: Image.Image | None = None  # binary/preprocessed preview
+    engine: str = "potrace"
 
 
 def _count_svg_stats(svg: str) -> tuple[int, int]:
@@ -50,92 +61,28 @@ def _count_svg_stats(svg: str) -> tuple[int, int]:
     return paths, nodes
 
 
-def _sanitize_svg_for_cad(svg: str, *, width: int, height: int) -> str:
-    """
-    Ensure SVG is friendly to xTool Studio, Fusion 360, LightBurn, Inkscape.
-    - valid viewBox
-    - no script
-    - fill-rule nonzero where helpful
-    """
-    # Strip any accidental scripts
+def _sanitize_svg(svg: str, *, width: int, height: int) -> str:
     svg = re.sub(r"<script[\s\S]*?</script>", "", svg, flags=re.I)
-    # Ensure xmlns
-    if "xmlns=" not in svg[:400]:
-        svg = svg.replace(
-            "<svg",
-            '<svg xmlns="http://www.w3.org/2000/svg"',
-            1,
-        )
-    # Ensure viewBox if missing
-    if "viewBox" not in svg[:500]:
+    if "xmlns=" not in svg[:500]:
+        svg = svg.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"', 1)
+    if "viewBox" not in svg[:600]:
         svg = re.sub(
             r"<svg([^>]*)>",
             rf'<svg\1 viewBox="0 0 {width} {height}">',
             svg,
             count=1,
         )
-    # Prefer nonzero fill-rule on paths that lack it (cleaner holes in CAD)
-    def _path_fill_rule(m: re.Match[str]) -> str:
-        tag = m.group(0)
-        if "fill-rule" in tag or "fill=" not in tag:
-            return tag
-        return tag[:-1] + ' fill-rule="nonzero">'
-
-    svg = re.sub(r"<path\b[^>]*>", _path_fill_rule, svg)
     return svg
 
 
-def vectorize_image(
-    img: Image.Image,
-    params: VectorizeParams | None = None,
-    on_progress: ProgressCb | None = None,
-) -> VectorResult:
-    """Full v0.5 pipeline: downsample → preprocess → vtracer → sanitize."""
+def _vtracer_svg(img: Image.Image, vt: dict[str, Any], report: ProgressCb) -> str:
     import vtracer
 
-    params = params or VectorizeParams()
-    t0 = time.perf_counter()
-    report = on_progress or (lambda _s, _p: None)
-
-    report("Planning resolution", 0.04)
-    max_side = clamp_process_size(
-        params.overrides.get("max_process_size", params.max_process_size)
-    )
-    work, plan = downsample_image(img, max_side)
-    vt = apply_preset(params.preset_id, params.overrides, auto_tune=False)
-    vt["max_process_size"] = max_side
-
-    # Colour mode override from UI
-    if vt.get("force_binary"):
-        vt["colormode"] = "binary"
-        vt["preprocess_mode"] = "laser_bw"
-    elif vt.get("force_color"):
-        if vt.get("colormode") == "binary":
-            vt["colormode"] = "color"
-
-    report("Edge-aware preprocess", 0.15)
-    pre_mode = str(vt.get("preprocess_mode", "logo"))
-    prepared = preprocess_for_vectorize(
-        work,
-        mode=pre_mode,
-        invert=bool(vt.get("invert", False)),
-        edge_strength=float(vt.get("edge_strength", 0.55)),
-        denoise=float(vt.get("denoise", 0.35)),
-        contrast=float(vt.get("contrast", 0.55)),
-        threshold_bias=float(vt.get("threshold_bias", 0.5)),
-        compound_levels=int(vt.get("compound_levels", 6)),
-    )
-    pre_note = describe_preprocess(vt)
-
-    report(f"Vectorizing @ {plan.label}", 0.35)
-
-    with tempfile.TemporaryDirectory(prefix="vectorforge_") as tmp:
-        tmp_path = Path(tmp)
-        src = tmp_path / "input.png"
-        dst = tmp_path / "output.svg"
-        prepared.save(src, format="PNG", optimize=False)
-
-        report("Running vtracer", 0.5)
+    report("Running vtracer", 0.55)
+    with tempfile.TemporaryDirectory(prefix="vf_") as tmp:
+        src = Path(tmp) / "in.png"
+        dst = Path(tmp) / "out.svg"
+        img.save(src, format="PNG")
         kwargs = dict(
             colormode=str(vt.get("colormode", "color")),
             hierarchical=str(vt.get("hierarchical", "stacked")),
@@ -152,7 +99,6 @@ def vectorize_image(
         try:
             vtracer.convert_image_to_svg_py(str(src), str(dst), **kwargs)
         except TypeError:
-            # Older bindings without some kwargs
             slim = {
                 k: kwargs[k]
                 for k in (
@@ -167,16 +113,84 @@ def vectorize_image(
                 )
             }
             vtracer.convert_image_to_svg_py(str(src), str(dst), **slim)
+        return dst.read_text(encoding="utf-8")
 
-        report("Sanitizing SVG", 0.9)
-        svg = dst.read_text(encoding="utf-8")
 
-    svg = _sanitize_svg_for_cad(svg, width=prepared.width, height=prepared.height)
+def vectorize_image(
+    img: Image.Image,
+    params: VectorizeParams | None = None,
+    on_progress: ProgressCb | None = None,
+) -> VectorResult:
+    params = params or VectorizeParams()
+    t0 = time.perf_counter()
+    report = on_progress or (lambda _s, _p: None)
+
+    report("Planning resolution", 0.04)
+    max_side = clamp_process_size(
+        params.overrides.get("max_process_size", params.max_process_size)
+    )
+    work, plan = downsample_image(img, max_side)
+    vt = apply_preset(params.preset_id, params.overrides)
+    vt["max_process_size"] = max_side
+    engine = str(vt.get("engine", "potrace")).lower()
+
+    preview_img: Image.Image | None = None
+    svg: str
+
+    if engine == "potrace":
+        report("Preprocess (outline)", 0.15)
+        preview_img, binary = preprocess_binary_for_potrace(
+            work,
+            denoise=float(vt.get("denoise", 0.22)),
+            contrast=float(vt.get("contrast", 0.3)),
+            edge_strength=float(vt.get("edge_strength", 0.35)),
+            threshold_method=str(vt.get("threshold_method", "otsu")),
+            blacklevel=float(vt.get("blacklevel", 0.5)),
+            invert=bool(vt.get("invert", False)),
+        )
+        report("Potrace", 0.5)
+        pkwargs = potrace_params_from_ui(vt)
+        style = str(vt.get("output_style", "outline"))
+        if style not in ("outline", "fill"):
+            style = "outline"
+        svg, stats = potrace_binary_to_svg(
+            binary,
+            style=style,  # type: ignore[arg-type]
+            **pkwargs,
+        )
+        path_count, node_estimate = stats.path_count, stats.node_estimate
+    else:
+        report("Preprocess (colour)", 0.15)
+        if vt.get("preprocess_mode") == "bw_compound" or params.preset_id == "bw_compound":
+            prepared = preprocess_bw_compound(
+                work,
+                levels=int(vt.get("compound_levels", 6)),
+                denoise=float(vt.get("denoise", 0.3)),
+                contrast=float(vt.get("contrast", 0.5)),
+            )
+        else:
+            prepared = preprocess_color_for_vtracer(
+                work,
+                denoise=float(vt.get("denoise", 0.3)),
+                contrast=float(vt.get("contrast", 0.45)),
+                edge_strength=float(vt.get("edge_strength", 0.4)),
+            )
+        preview_img = prepared
+        svg = _vtracer_svg(prepared, vt, report)
+        path_count, node_estimate = _count_svg_stats(svg)
+
+    report("Sanitize SVG", 0.9)
+    w = work.width
+    h = work.height
+    # Prefer dimensions from svg if present
+    m = re.search(r'viewBox="0\s+0\s+([\d.]+)\s+([\d.]+)"', svg)
+    if m:
+        w, h = int(float(m.group(1))), int(float(m.group(2)))
+    svg = _sanitize_svg(svg, width=w, height=h)
 
     meta = (
-        f"<!-- VectorForge {__import__('vectorforge').__version__} "
-        f"| preset={params.preset_id} | {pre_note} "
-        f"| working={plan.label} | max_side={max_side} -->\n"
+        f"<!-- VectorForge {__version__} | preset={params.preset_id} "
+        f"| {describe_preprocess(vt)} | working={plan.label} -->\n"
     )
     if svg.lstrip().startswith("<?xml"):
         parts = svg.split("\n", 1)
@@ -184,21 +198,22 @@ def vectorize_image(
     else:
         svg = meta + svg
 
-    paths, nodes = _count_svg_stats(svg)
     ms = int((time.perf_counter() - t0) * 1000)
     report("Done", 1.0)
 
     return VectorResult(
         svg=svg,
-        width=prepared.width,
-        height=prepared.height,
-        path_count=paths,
-        node_estimate=nodes,
+        width=w,
+        height=h,
+        path_count=path_count,
+        node_estimate=node_estimate,
         duration_ms=ms,
         process_label=plan.label,
         params=vt,
         warning=plan.warning,
-        preprocess_note=pre_note,
+        preprocess_note=describe_preprocess(vt),
+        preview_png=preview_img,
+        engine=engine,
     )
 
 

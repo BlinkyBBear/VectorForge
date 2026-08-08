@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vectorforge"
-version = "0.5.0"
-description = "Offline high-quality image-to-SVG for laser cutting and CAD"
+version = "1.0.0"
+description = "Offline high-quality image-to-SVG/DXF for CNC and laser cutting"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "VectorForge contributors" }]
 dependencies = [
   "customtkinter>=5.2.2",
   "Pillow>=10.0.0",
   "numpy>=1.24.0",
   "opencv-python-headless>=4.8.0",
+  "potracer>=0.0.4",
   "vtracer>=0.6.12",
   "rembg[cpu]>=2.0.50",
 ]

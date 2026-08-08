@@ -1,4 +1,4 @@
-"""VectorForge desktop — offline raster → laser-ready SVG."""
+"""VectorForge desktop — offline raster → CNC/laser-ready SVG & DXF."""
 
-__version__ = "0.5.0"
+__version__ = "1.0.0"
 __app_name__ = "VectorForge"

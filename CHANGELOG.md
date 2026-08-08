@@ -1,28 +1,28 @@
 # Changelog
 
-## [0.5.0] — 2026-08-07
+## [1.0.0] — 2026-08-08
 
 ### Added
-- Edge-aware **preprocessing pipeline** (CLAHE, bilateral, Canny boost, adaptive + Otsu threshold, morphology)
-- New presets: **Laser Pro**, **Logo / Line Art**, **Illustration Colour**, **High Detail Photo**, **Photorealistic Max**, **B&W Compound**
-- Full sidebar controls for preprocess + all major vtracer parameters
-- Pure B&W vs Colour mode toggle
+- **Potrace-first architecture** for CNC Outline / Logo / Laser B&W
+- **CNC Outline** preset — stroke-only closed paths for sheet-metal cut-outs
+- **Live SVG path preview** after vectorize (actual geometry, not raster guess)
+- **DXF export** for Fusion 360 / CNC workflows
+- Clean Otsu/fixed/adaptive threshold (no dual-min flood)
+- Auto ink-fraction invert when subject is inverted
+- Full numeric sidebar + scrollable controls
+- Colour mode: Outline-only / Pure B&W / Colour compound
 - Max process size up to **6000px**
-- BG removal **strength** control
-- **Live brush preview** while dragging
-- SVG sanitize for xTool / Fusion / LightBurn / Inkscape
+- Acceptance tests for Kelpie-style diamond sign
 
 ### Changed
-- Version scheme aligned to product tags (`0.5.0`)
-- Presets no longer overwrite `filter_speckle` via auto-tune by default
-- README rewritten for quality tips and CAD import
+- Default preset is **CNC Outline**
+- Colour / photo still use vtracer with milder preprocess
+- Version tag **v1.0**
 
-## [2.0.0] — 2026-08-07
+## [0.5.0] — 2026-08-07
 
-### Added
-- Initial Python desktop app (CustomTkinter + rembg + vtracer + PyInstaller)
+- Edge-aware OpenCV preprocess + vtracer-only pipeline
 
-## [1.0.0] — 2026-08-07
+## [2.0.0] / early — 2026-08-07
 
-### Added
-- Legacy web prototype experiments
+- Initial Python desktop shell (rembg + vtracer)
