@@ -27,6 +27,7 @@ from vectorforge.engine.memory import HARD_MAX_PROCESS_SIZE, clamp_process_size
 from vectorforge.engine.presets import DEFAULT_PRESET_ID, PRESETS, preset_choices
 from vectorforge.engine.svg_render import render_svg_preview
 from vectorforge.engine.vectorize import VectorizeParams, vectorize_image
+from vectorforge.engine.mask_preview import preview_binary_mask
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -46,6 +47,8 @@ class VectorForgeApp(ctk.CTk):
         self._binary_preview: Image.Image | None = None
         self._photo: ImageTk.PhotoImage | None = None
         self._busy = False
+        self._mask_debounce_id = None
+        self._mask_preview_gen = 0
         self._brush_points: list[tuple[float, float]] = []
         self._source_path: Path | None = None
 
@@ -141,7 +144,7 @@ class VectorForgeApp(ctk.CTk):
         # ---- Simple panel: few key sliders ----
         self._simple_frame = ctk.CTkFrame(side, fg_color="transparent")
         self._section(self._simple_frame, "Quick controls")
-        self.s_denoise, _ = self._slider(self._simple_frame, "Denoise / clean", 0, 1, 0.45)
+        self.s_denoise, _ = self._slider(self._simple_frame, "Denoise / clean", 0, 1, 0.45, mask_refresh=True)
         self.s_turdsize, _ = self._slider(
             self._simple_frame, "Despeckle (turd size)", 0, 24, 14, int_mode=True
         )
@@ -178,18 +181,18 @@ class VectorForgeApp(ctk.CTk):
             text_color="gray60",
         ).pack(anchor="w", padx=12)
         self.max_side, _ = self._slider(
-            self._advanced_frame, "Max process size", 800, HARD_MAX_PROCESS_SIZE, 3600, int_mode=True
+            self._advanced_frame, "Max process size", 800, HARD_MAX_PROCESS_SIZE, 3600, int_mode=True, mask_refresh=True
         )
         self.highpass_radius, _ = self._slider(
-            self._advanced_frame, "Highpass radius (px)", 0, 12, 3.5
+            self._advanced_frame, "Highpass radius (px)", 0, 12, 3.5, mask_refresh=True
         )
         self.scale_factor, _ = self._slider(
-            self._advanced_frame, "Scale factor (pre-threshold)", 1.0, 4.0, 2.0
+            self._advanced_frame, "Scale factor (pre-threshold)", 1.0, 4.0, 2.0, mask_refresh=True
         )
-        self.edge_strength, _ = self._slider(self._advanced_frame, "Edge boost", 0, 1, 0.20)
-        self.denoise, _ = self._slider(self._advanced_frame, "Denoise", 0, 1, 0.45)
-        self.contrast, _ = self._slider(self._advanced_frame, "Contrast", 0, 1, 0.22)
-        self.blacklevel, _ = self._slider(self._advanced_frame, "Black level", 0.05, 0.95, 0.50)
+        self.edge_strength, _ = self._slider(self._advanced_frame, "Edge boost", 0, 1, 0.20, mask_refresh=True)
+        self.denoise, _ = self._slider(self._advanced_frame, "Denoise", 0, 1, 0.45, mask_refresh=True)
+        self.contrast, _ = self._slider(self._advanced_frame, "Contrast", 0, 1, 0.22, mask_refresh=True)
+        self.blacklevel, _ = self._slider(self._advanced_frame, "Black level", 0.05, 0.95, 0.50, mask_refresh=True)
         self.threshold_method = ctk.StringVar(value="otsu")
         ctk.CTkLabel(self._advanced_frame, text="Threshold method", anchor="w").pack(
             fill="x", padx=12, pady=(4, 0)
@@ -198,6 +201,7 @@ class VectorForgeApp(ctk.CTk):
             self._advanced_frame,
             variable=self.threshold_method,
             values=["otsu", "fixed", "adaptive"],
+            command=lambda _v: self._schedule_mask_preview(),
         ).pack(fill="x", padx=12, pady=2)
 
         self._potrace_frame = ctk.CTkFrame(self._advanced_frame, fg_color="transparent")
@@ -303,13 +307,24 @@ class VectorForgeApp(ctk.CTk):
         ).pack(fill="x", padx=12, pady=4)
 
         # Shared action buttons (always visible)
+        act = ctk.CTkFrame(side, fg_color="transparent")
+        act.pack(fill="x", padx=12, pady=(16, 4))
         ctk.CTkButton(
-            side,
+            act,
+            text="Preview mask",
+            command=self._preview_mask,
+            height=40,
+            fg_color="gray35",
+            hover_color="gray45",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        ctk.CTkButton(
+            act,
             text="Vectorize",
             command=self._vectorize,
-            height=44,
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).pack(fill="x", padx=12, pady=(16, 4))
+            height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         exp = ctk.CTkFrame(side, fg_color="transparent")
         exp.pack(fill="x", padx=12, pady=4)
@@ -439,6 +454,7 @@ class VectorForgeApp(ctk.CTk):
         default: float,
         *,
         int_mode: bool = False,
+        mask_refresh: bool = False,
     ) -> tuple[ctk.CTkSlider, ctk.CTkLabel]:
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=1)
@@ -463,6 +479,13 @@ class VectorForgeApp(ctk.CTk):
 
         s.configure(command=on_change)
         s.pack(fill="x", padx=12, pady=(0, 2))
+        if mask_refresh:
+            def _on_release(_event=None) -> None:
+                self._schedule_mask_preview()
+            try:
+                s.bind("<ButtonRelease-1>", _on_release)
+            except Exception:
+                pass
         return s, val_lbl
 
     def _on_preset_label(self, label: str) -> None:
@@ -908,6 +931,66 @@ class VectorForgeApp(ctk.CTk):
         self._view_mode.set("source")
         self._redraw()
         self._set_status("Subject reset")
+
+
+    def _schedule_mask_preview(self, delay_ms: int = 350) -> None:
+        """Debounce auto binary-mask refresh (slider release / threshold change)."""
+        if self._active_image() is None:
+            return
+        if self._mask_debounce_id is not None:
+            try:
+                self.after_cancel(self._mask_debounce_id)
+            except Exception:
+                pass
+        self._mask_debounce_id = self.after(delay_ms, self._preview_mask_auto)
+
+    def _preview_mask_auto(self) -> None:
+        self._mask_debounce_id = None
+        if self._busy:
+            return
+        self._preview_mask(silent=True)
+
+    def _preview_mask(self, silent: bool = False) -> None:
+        """Raster prep only -> Binary mask tab (no Potrace/vtracer)."""
+        img = self._active_image()
+        if img is None:
+            self._set_status("Open an image first.")
+            return
+        overrides = self._collect_overrides()
+        self._mask_preview_gen += 1
+        gen = self._mask_preview_gen
+
+        def job() -> None:
+            if not silent:
+                self.after(0, lambda: self._set_status("Previewing binary mask..."))
+                self.after(0, lambda: self.progress.set(0.2))
+            mask_img, meta = preview_binary_mask(img, overrides)
+
+            def done() -> None:
+                if gen != self._mask_preview_gen:
+                    return
+                self._binary_preview = mask_img
+                self._view_mode.set("binary")
+                self._reset_view()
+                hp = meta.get("highpass_radius", "?")
+                sf = meta.get("scale_factor", "?")
+                bs = meta.get("binary_size", ("?", "?"))
+                line1 = "Binary mask preview (no vectorize)"
+                line2 = "hp=%s  scale=%s" % (hp, sf)
+                line3 = "mask %sx%s  ·  %s" % (bs[0], bs[1], meta.get("process_label", ""))
+                line4 = "Adjust Raster prep -> Preview mask · Vectorize when ready"
+                self.stats.configure(text="\n".join((line1, line2, line3, line4)))
+                if silent:
+                    self._set_status("Binary mask refreshed")
+                else:
+                    self._set_status(
+                        "Binary mask updated — Vectorize when solid shapes look right"
+                    )
+                    self.progress.set(1.0)
+
+            self.after(0, done)
+
+        self._run_async(job)
 
     def _vectorize(self) -> None:
         img = self._active_image()

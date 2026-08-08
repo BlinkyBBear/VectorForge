@@ -222,3 +222,24 @@ class CenterlineTests(unittest.TestCase):
         self.assertEqual(result.engine, "potrace")
         self.assertGreater(result.path_count, 0)
         self.assertGreaterEqual(result.svg.upper().count("Z"), result.path_count)
+
+
+class MaskPreviewTests(unittest.TestCase):
+    def test_preview_without_trace(self) -> None:
+        from vectorforge.engine.mask_preview import preview_binary_mask
+        img = Image.new("RGB", (160, 160), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        d.rectangle((30, 30, 130, 130), fill=(0, 0, 0))
+        mask, meta = preview_binary_mask(
+            img,
+            {
+                "denoise": 0.3,
+                "highpass_radius": 2.0,
+                "scale_factor": 1.5,
+                "auto_scale": False,
+                "max_process_size": 160,
+            },
+        )
+        self.assertIsNotNone(mask)
+        self.assertIn("scale_factor", meta)
+        self.assertEqual(mask.mode, "RGB")

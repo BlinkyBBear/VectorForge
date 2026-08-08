@@ -1,6 +1,12 @@
 # Changelog
 
-## [1.0.3] — 2026-08-08
+## [1.0.4] — 2026-08-08
+
+### Added
+- **Preview mask** — refresh Binary mask from Raster prep only (no Potrace/vtracer)
+- Debounced auto-refresh on Advanced raster slider release / threshold change
+
+[1.0.3] — 2026-08-08
 
 ### Added
 - **Centerline / Skeleton** mode (Inkscape-style): thick strokes → single open stroke paths
