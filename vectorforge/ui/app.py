@@ -153,6 +153,18 @@ class VectorForgeApp(ctk.CTk):
             text="Silhouette only (CNC cut-out, drop internal detail)",
             variable=self.s_silhouette,
         ).pack(anchor="w", padx=12, pady=6)
+        self.s_sil_strength = ctk.StringVar(value="Normal")
+        ctk.CTkLabel(
+            self._simple_frame,
+            text="Silhouette strength",
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+        ).pack(fill="x", padx=12, pady=(2, 0))
+        ctk.CTkOptionMenu(
+            self._simple_frame,
+            variable=self.s_sil_strength,
+            values=["Soft", "Normal", "Aggressive"],
+        ).pack(fill="x", padx=12, pady=2)
 
         # ---- Advanced panel ----
         self._advanced_frame = ctk.CTkFrame(side, fg_color="transparent")
@@ -218,6 +230,18 @@ class VectorForgeApp(ctk.CTk):
             text="Silhouette mode (CNC cut-out, drop internal detail)",
             variable=self.silhouette_var,
         ).pack(anchor="w", padx=12, pady=2)
+        self.sil_strength = ctk.StringVar(value="Normal")
+        ctk.CTkLabel(
+            self._potrace_frame,
+            text="Silhouette strength",
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+        ).pack(fill="x", padx=12, pady=(2, 0))
+        ctk.CTkOptionMenu(
+            self._potrace_frame,
+            variable=self.sil_strength,
+            values=["Soft", "Normal", "Aggressive"],
+        ).pack(fill="x", padx=12, pady=2)
 
         self._vtracer_frame = ctk.CTkFrame(self._advanced_frame, fg_color="transparent")
         self._section(self._vtracer_frame, "Vtracer (colour only)")
@@ -491,6 +515,7 @@ class VectorForgeApp(ctk.CTk):
                 "turdsize": int(round(self.s_turdsize.get())),
                 "opttolerance": float(self.s_opttolerance.get()),
                 "silhouette": bool(self.s_silhouette.get()),
+                "silhouette_strength": self.s_sil_strength.get().lower(),
                 "outer_and_counters_only": True,
                 "logo_text": True,
                 "color_mode": cm,
@@ -529,6 +554,7 @@ class VectorForgeApp(ctk.CTk):
                 "invert": bool(self.invert_var.get()),
                 "outer_and_counters_only": bool(self.outer_only_var.get()),
                 "silhouette": bool(self.silhouette_var.get()),
+                "silhouette_strength": self.sil_strength.get().lower(),
                 "logo_text": True,
                 "color_mode": cm,
             }

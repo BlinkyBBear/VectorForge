@@ -127,3 +127,63 @@ class QualityAndRasterTests(unittest.TestCase):
             '<svg><path d="M0,0 L1,0 L1,1 L0,1 Z" stroke="#000" fill="none"/></svg>'
         )
         self.assertIn("Laser-ready", r.tip)
+
+
+class SilhouetteTierTests(unittest.TestCase):
+    def _busy_sign(self, size: int = 700) -> Image.Image:
+        img = Image.new("RGB", (size, size), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        cx = cy = size // 2
+        outer = [(cx, 20), (size - 20, cy), (cx, size - 20), (20, cy)]
+        m = 45
+        inner = [(cx, 20 + m), (size - 20 - m, cy), (cx, size - 20 - m), (20 + m, cy)]
+        d.polygon(outer, fill=(0, 0, 0))
+        d.polygon(inner, fill=(255, 255, 255))
+        for x in (0.22, 0.32, 0.42, 0.52, 0.62):
+            d.rectangle((size * x, size * 0.28, size * (x + 0.06), size * 0.36), fill=(0, 0, 0))
+        for x in (0.30, 0.40, 0.50):
+            d.rectangle((size * x, size * 0.40, size * (x + 0.07), size * 0.46), fill=(0, 0, 0))
+        d.ellipse((size * 0.32, size * 0.52, size * 0.50, size * 0.78), fill=(0, 0, 0))
+        d.ellipse((size * 0.54, size * 0.58, size * 0.70, size * 0.74), fill=(0, 0, 0))
+        d.ellipse((size * 0.16, size * 0.58, size * 0.28, size * 0.76), fill=(0, 0, 0))
+        for i in range(15):
+            d.ellipse((20 + i * 12, 30, 24 + i * 12, 34), fill=(0, 0, 0))
+        return img
+
+    def test_normal_keeps_more_than_aggressive(self) -> None:
+        from vectorforge.engine.preprocess import preprocess_binary_for_potrace
+        from vectorforge.engine.potrace_engine import potrace_binary_to_svg
+        from vectorforge.engine.quality_check import analyze_svg_quality
+
+        _, binary, _ = preprocess_binary_for_potrace(
+            self._busy_sign(),
+            highpass_radius=2,
+            scale_factor=1.2,
+            auto_scale=False,
+            logo_text=True,
+            denoise=0.35,
+        )
+        off, st_off = potrace_binary_to_svg(
+            binary, silhouette=False, outer_and_counters_only=True, turdsize=6
+        )
+        n_svg, st_n = potrace_binary_to_svg(
+            binary, silhouette=True, silhouette_strength="normal", turdsize=6
+        )
+        a_svg, st_a = potrace_binary_to_svg(
+            binary, silhouette=True, silhouette_strength="aggressive", turdsize=6
+        )
+        self.assertGreaterEqual(st_off.path_count, st_n.path_count)
+        self.assertGreaterEqual(st_n.path_count, st_a.path_count)
+        self.assertGreaterEqual(st_n.path_count, 6)
+        self.assertLess(st_a.path_count, st_n.path_count)
+        q = analyze_svg_quality(n_svg)
+        self.assertEqual(q.open_count, 0)
+        self.assertIn("Laser-ready", q.tip)
+        self.assertIn("Z", n_svg)
+
+    def test_dxf_has_mm_units(self) -> None:
+        from vectorforge.engine.dxf_export import svg_to_dxf
+
+        svg = '<svg viewBox="0 0 10 10"><path d="M0,0 L10,0 L10,10 L0,10 Z"/></svg>'
+        dxf = svg_to_dxf(svg)
+        self.assertIn("$INSUNITS", dxf)

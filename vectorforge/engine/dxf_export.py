@@ -151,8 +151,11 @@ def svg_to_dxf(svg: str, *, flip_y: bool = True) -> str:
         for poly in _parse_path_d(d):
             emit_polyline(poly)
 
+    # HEADER: $INSUNITS=4 (millimeters) for Fusion 360 / CAM
     dxf = (
         "0\nSECTION\n2\nHEADER\n"
+        "9\n$INSUNITS\n70\n4\n"
+        "9\n$MEASUREMENT\n70\n1\n"
         "0\nENDSEC\n"
         "0\nSECTION\n2\nTABLES\n0\nENDSEC\n"
         "0\nSECTION\n2\nBLOCKS\n0\nENDSEC\n"

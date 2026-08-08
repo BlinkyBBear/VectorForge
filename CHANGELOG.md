@@ -1,6 +1,17 @@
 # Changelog
 
-## [1.0.1] — 2026-08-08
+## [1.0.2] — 2026-08-08
+
+### Fixed
+- **Silhouette mode** no longer drops text / secondary animals (tiered Soft/Normal/Aggressive)
+- Normal keeps major elements (text blocks, icons); Aggressive ≈ previous over-filter
+
+### Improved
+- Closed-path enforcement + near-duplicate stroke cull for laser cut safety
+- DXF `$INSUNITS=4` (mm) for Fusion 360 / CAM
+- Stronger laser-ready status tips (open paths, node density)
+
+[1.0.1] — 2026-08-08
 
 ### Added
 - **Highpass radius** (0–12 px) and **Scale factor** (1–4×) in Advanced → Raster prep

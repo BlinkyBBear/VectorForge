@@ -58,14 +58,23 @@ def analyze_svg_quality(svg: str) -> QualityReport:
     if path_count == 0:
         tip = "No paths produced — adjust Raster prep / Binary mask"
         ok = False
-    elif open_n > 0 and open_n >= max(1, path_count // 4):
-        tip = "Warning: some paths may be open — check in LightBurn/Fusion"
+    elif open_n > 0:
+        tip = (
+            f"Warning: {open_n} open path(s) of {path_count} — "
+            "not cut-safe; re-vectorize or check Fusion/LightBurn"
+        )
         ok = False
-    elif path_count > 0 and npp > 120:
-        tip = "Warning: high node density — try higher Curve optimize or Silhouette"
+    elif path_count > 0 and npp > 140:
+        tip = (
+            f"Warning: high node density (~{npp:.0f}/path) — "
+            "raise Curve optimize or use Silhouette Soft/Normal"
+        )
         ok = False
     elif closed == path_count and path_count > 0:
-        tip = f"Laser-ready: {path_count} closed path{'s' if path_count != 1 else ''}"
+        tip = (
+            f"Laser-ready: {path_count} closed path"
+            f"{'s' if path_count != 1 else ''} (Fusion/CNC import OK)"
+        )
         ok = True
     else:
         tip = f"OK: {path_count} paths ({closed} closed)"
