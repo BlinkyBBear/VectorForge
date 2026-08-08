@@ -1,9 +1,7 @@
 """
-VectorForge v1.0 desktop UI.
+VectorForge v1.0 UI — Simple (presets + few sliders) / Advanced (full control).
 
-- Binary mask preview (what Potrace actually traces)
-- Zoom (mouse wheel) + pan (drag) on all previews
-- Mode-aware control visibility
+Zoom + pan · Binary mask preview · Silhouette mode for CNC cut-outs.
 """
 
 from __future__ import annotations
@@ -38,7 +36,7 @@ class VectorForgeApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"VectorForge v{__version__} — CNC / Laser SVG")
-        self.geometry("1440x920")
+        self.geometry("1480x940")
         self.minsize(1100, 720)
 
         self._source: Image.Image | None = None
@@ -51,26 +49,26 @@ class VectorForgeApp(ctk.CTk):
         self._brush_points: list[tuple[float, float]] = []
         self._source_path: Path | None = None
 
-        # Zoom / pan state (applies to current view image)
         self._zoom = 1.0
         self._pan_x = 0.0
         self._pan_y = 0.0
         self._drag_start: tuple[int, int] | None = None
         self._panning = False
-        self._view_img: Image.Image | None = None  # full-res image currently shown
 
         self._view_mode = ctk.StringVar(value="source")
+        self._ui_mode = ctk.StringVar(value="simple")  # simple | advanced
 
         self._build()
         self._apply_preset_to_controls(DEFAULT_PRESET_ID)
         self._update_mode_visibility()
+        self._apply_ui_mode()
         self._set_status(rembg_status())
 
     def _build(self) -> None:
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        side = ctk.CTkScrollableFrame(self, width=360, corner_radius=0)
+        side = ctk.CTkScrollableFrame(self, width=380, corner_radius=0)
         side.grid(row=0, column=0, sticky="nsew")
         self._side = side
 
@@ -82,12 +80,26 @@ class VectorForgeApp(ctk.CTk):
             text=f"v{__version__} · offline · CNC outline + laser SVG/DXF",
             font=ctk.CTkFont(size=11),
             text_color="gray70",
-        ).pack(padx=12, pady=(0, 10), anchor="w")
+        ).pack(padx=12, pady=(0, 8), anchor="w")
+
+        # Simple / Advanced toggle
+        mode_row = ctk.CTkFrame(side, fg_color="transparent")
+        mode_row.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkLabel(mode_row, text="UI:").pack(side="left")
+        for val, lab in (("simple", "Simple"), ("advanced", "Advanced")):
+            ctk.CTkRadioButton(
+                mode_row,
+                text=lab,
+                variable=self._ui_mode,
+                value=val,
+                command=self._apply_ui_mode,
+            ).pack(side="left", padx=8)
 
         ctk.CTkButton(side, text="Open image…", command=self._open_image).pack(
             fill="x", padx=12, pady=4
         )
 
+        # ---- Always visible: preset + colour mode ----
         self._section(side, "Quality preset")
         self.preset_var = ctk.StringVar(value=DEFAULT_PRESET_ID)
         labels = [f"{k} — {lab}" for k, lab in preset_choices()]
@@ -101,12 +113,12 @@ class VectorForgeApp(ctk.CTk):
         self.preset_desc = ctk.CTkLabel(
             side,
             text=PRESETS[DEFAULT_PRESET_ID]["description"],
-            wraplength=320,
+            wraplength=340,
             justify="left",
             font=ctk.CTkFont(size=11),
             text_color="gray65",
         )
-        self.preset_desc.pack(fill="x", padx=12, pady=(2, 8))
+        self.preset_desc.pack(fill="x", padx=12, pady=(2, 6))
 
         self._section(side, "Colour / output mode")
         self.color_mode = ctk.StringVar(value="outline")
@@ -125,40 +137,64 @@ class VectorForgeApp(ctk.CTk):
                 command=self._update_mode_visibility,
             ).pack(side="left", padx=3)
 
-        self._section(side, "Max process size (px)")
-        self.max_side, _ = self._slider(
-            side, "Max process size", 800, HARD_MAX_PROCESS_SIZE, 3600, int_mode=True
+        # ---- Simple panel: few key sliders ----
+        self._simple_frame = ctk.CTkFrame(side, fg_color="transparent")
+        self._section(self._simple_frame, "Quick controls")
+        self.s_denoise, _ = self._slider(self._simple_frame, "Denoise / clean", 0, 1, 0.45)
+        self.s_turdsize, _ = self._slider(
+            self._simple_frame, "Despeckle (turd size)", 0, 24, 14, int_mode=True
         )
+        self.s_opttolerance, _ = self._slider(
+            self._simple_frame, "Smooth curves", 0.05, 1.0, 0.60
+        )
+        self.s_silhouette = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self._simple_frame,
+            text="Silhouette only (CNC cut-out, drop internal detail)",
+            variable=self.s_silhouette,
+        ).pack(anchor="w", padx=12, pady=6)
 
-        self._section(side, "Preprocess")
-        self.edge_strength, _ = self._slider(side, "Edge strength", 0, 1, 0.25)
-        self.denoise, _ = self._slider(side, "Denoise", 0, 1, 0.40)
-        self.contrast, _ = self._slider(side, "Contrast", 0, 1, 0.25)
-        self.blacklevel, _ = self._slider(side, "Black level", 0.05, 0.95, 0.50)
+        # ---- Advanced panel ----
+        self._advanced_frame = ctk.CTkFrame(side, fg_color="transparent")
+
+        self._section(self._advanced_frame, "Raster prep")
+        ctk.CTkLabel(
+            self._advanced_frame,
+            text="Tune until Binary mask shows solid clean shapes",
+            font=ctk.CTkFont(size=11),
+            text_color="gray60",
+        ).pack(anchor="w", padx=12)
+        self.max_side, _ = self._slider(
+            self._advanced_frame, "Max process size", 800, HARD_MAX_PROCESS_SIZE, 3600, int_mode=True
+        )
+        self.edge_strength, _ = self._slider(self._advanced_frame, "Edge / highpass", 0, 1, 0.20)
+        self.denoise, _ = self._slider(self._advanced_frame, "Denoise", 0, 1, 0.45)
+        self.contrast, _ = self._slider(self._advanced_frame, "Contrast", 0, 1, 0.22)
+        self.blacklevel, _ = self._slider(self._advanced_frame, "Black level", 0.05, 0.95, 0.50)
         self.threshold_method = ctk.StringVar(value="otsu")
-        ctk.CTkLabel(side, text="Threshold method", anchor="w").pack(
+        ctk.CTkLabel(self._advanced_frame, text="Threshold method", anchor="w").pack(
             fill="x", padx=12, pady=(4, 0)
         )
         ctk.CTkOptionMenu(
-            side,
+            self._advanced_frame,
             variable=self.threshold_method,
             values=["otsu", "fixed", "adaptive"],
         ).pack(fill="x", padx=12, pady=2)
 
-        self._potrace_frame = ctk.CTkFrame(side, fg_color="transparent")
+        self._potrace_frame = ctk.CTkFrame(self._advanced_frame, fg_color="transparent")
         self._potrace_frame.pack(fill="x")
-        self._section(self._potrace_frame, "Potrace (outline / B&W)")
+        self._section(self._potrace_frame, "Trace (Potrace)")
         self.turdsize, _ = self._slider(
-            self._potrace_frame, "Turd size (despeckle)", 0, 20, 10, int_mode=True
+            self._potrace_frame, "Turd size (despeckle)", 0, 24, 14, int_mode=True
         )
         self.alphamax, _ = self._slider(
-            self._potrace_frame, "Corner threshold α", 0, 1.34, 0.70
+            self._potrace_frame, "Corner threshold α", 0, 1.34, 0.65
         )
         self.opttolerance, _ = self._slider(
-            self._potrace_frame, "Curve optimize", 0.05, 1.0, 0.55
+            self._potrace_frame, "Curve optimize", 0.05, 1.0, 0.60
         )
         self.stroke_width, _ = self._slider(
-            self._potrace_frame, "Stroke width (outline)", 0.25, 4, 1.0
+            self._potrace_frame, "Stroke width", 0.25, 4, 1.0
         )
         self.invert_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
@@ -167,11 +203,17 @@ class VectorForgeApp(ctk.CTk):
         self.outer_only_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             self._potrace_frame,
-            text="Outer + counters only (drop junk paths)",
+            text="Outer + counters only",
             variable=self.outer_only_var,
         ).pack(anchor="w", padx=12, pady=2)
+        self.silhouette_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self._potrace_frame,
+            text="Silhouette mode (CNC cut-out, drop internal detail)",
+            variable=self.silhouette_var,
+        ).pack(anchor="w", padx=12, pady=2)
 
-        self._vtracer_frame = ctk.CTkFrame(side, fg_color="transparent")
+        self._vtracer_frame = ctk.CTkFrame(self._advanced_frame, fg_color="transparent")
         self._section(self._vtracer_frame, "Vtracer (colour only)")
         self.filter_speckle, _ = self._slider(
             self._vtracer_frame, "Filter speckle", 0, 20, 4, int_mode=True
@@ -189,28 +231,29 @@ class VectorForgeApp(ctk.CTk):
             self._vtracer_frame, "Path precision", 1, 8, 3, int_mode=True
         )
 
-        self._section(side, "Background removal")
-        self.bg_strength, _ = self._slider(side, "BG strength", 0, 1, 0.55)
+        self._section(self._advanced_frame, "Background removal")
+        self.bg_strength, _ = self._slider(self._advanced_frame, "BG strength", 0, 1, 0.55)
         self.tolerance, _ = self._slider(
-            side, "Wand tolerance", 8, 80, 36, int_mode=True
+            self._advanced_frame, "Wand tolerance", 8, 80, 36, int_mode=True
         )
         self.brush_radius, _ = self._slider(
-            side, "Brush radius", 4, 48, 14, int_mode=True
+            self._advanced_frame, "Brush radius", 4, 48, 14, int_mode=True
         )
         self.bg_tool = ctk.StringVar(value="erase")
-        tools = ctk.CTkFrame(side, fg_color="transparent")
+        tools = ctk.CTkFrame(self._advanced_frame, fg_color="transparent")
         tools.pack(fill="x", padx=10, pady=4)
         for key, label in (("erase", "Erase"), ("restore", "Restore"), ("brush", "Brush−")):
             ctk.CTkRadioButton(
                 tools, text=label, variable=self.bg_tool, value=key
             ).pack(side="left", padx=4)
         ctk.CTkButton(
-            side, text="Auto remove background", command=self._auto_bg
+            self._advanced_frame, text="Auto remove background", command=self._auto_bg
         ).pack(fill="x", padx=12, pady=(8, 4))
         ctk.CTkButton(
-            side, text="Reset subject", command=self._reset_subject, fg_color="gray30"
+            self._advanced_frame, text="Reset subject", command=self._reset_subject, fg_color="gray30"
         ).pack(fill="x", padx=12, pady=4)
 
+        # Shared action buttons (always visible)
         ctk.CTkButton(
             side,
             text="Vectorize",
@@ -276,7 +319,7 @@ class VectorForgeApp(ctk.CTk):
         self.canvas.bind("<Button-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
-        self.canvas.bind("<MouseWheel>", self._on_wheel)  # Windows
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
         self.canvas.bind("<Button-4>", lambda e: self._on_wheel_linux(e, 1))
         self.canvas.bind("<Button-5>", lambda e: self._on_wheel_linux(e, -1))
         self.canvas.bind("<Configure>", lambda _e: self._redraw())
@@ -289,15 +332,32 @@ class VectorForgeApp(ctk.CTk):
         self.drop_hint = ctk.CTkLabel(
             self.canvas,
             text=(
-                "Open image → CNC Outline → Vectorize\n"
-                "Binary mask = what Potrace traces · Wheel zoom · Drag pan"
+                "Open image → choose preset → Vectorize\n"
+                "Simple = few controls · Advanced = full raster + trace tuning\n"
+                "Binary mask = what Potrace sees · Wheel zoom · Drag pan"
             ),
             font=ctk.CTkFont(size=14),
             text_color="gray60",
         )
         self.drop_hint.place(relx=0.5, rely=0.5, anchor="center")
 
+    def _apply_ui_mode(self) -> None:
+        mode = self._ui_mode.get()
+        if mode == "simple":
+            self._advanced_frame.pack_forget()
+            if not self._simple_frame.winfo_ismapped():
+                self._simple_frame.pack(fill="x", after=self.preset_desc.master if False else self.preset_desc)
+                # pack after colour mode row's parent is hard; just pack at end before vectorize
+                self._simple_frame.pack(fill="x", padx=0)
+        else:
+            self._simple_frame.pack_forget()
+            if not self._advanced_frame.winfo_ismapped():
+                self._advanced_frame.pack(fill="x")
+            self._update_mode_visibility()
+
     def _update_mode_visibility(self) -> None:
+        if self._ui_mode.get() != "advanced":
+            return
         cm = self.color_mode.get()
         if cm == "color":
             if not self._vtracer_frame.winfo_ismapped():
@@ -358,15 +418,20 @@ class VectorForgeApp(ctk.CTk):
 
     def _apply_preset_to_controls(self, key: str) -> None:
         p = PRESETS[key]["params"]
+        # simple
+        self.s_denoise.set(p.get("denoise", 0.45))
+        self.s_turdsize.set(p.get("turdsize", 14))
+        self.s_opttolerance.set(p.get("opttolerance", 0.60))
+        # advanced
         self.max_side.set(p.get("max_process_size", 3600))
-        self.edge_strength.set(p.get("edge_strength", 0.25))
-        self.denoise.set(p.get("denoise", 0.40))
-        self.contrast.set(p.get("contrast", 0.25))
+        self.edge_strength.set(p.get("edge_strength", 0.20))
+        self.denoise.set(p.get("denoise", 0.45))
+        self.contrast.set(p.get("contrast", 0.22))
         self.blacklevel.set(p.get("blacklevel", 0.5))
         self.threshold_method.set(p.get("threshold_method", "otsu"))
-        self.turdsize.set(p.get("turdsize", 10))
-        self.alphamax.set(p.get("alphamax", 0.7))
-        self.opttolerance.set(p.get("opttolerance", 0.55))
+        self.turdsize.set(p.get("turdsize", 14))
+        self.alphamax.set(p.get("alphamax", 0.65))
+        self.opttolerance.set(p.get("opttolerance", 0.60))
         self.stroke_width.set(p.get("stroke_width", 1.0))
         self.filter_speckle.set(p.get("filter_speckle", 4))
         self.color_precision.set(p.get("color_precision", 6))
@@ -384,6 +449,9 @@ class VectorForgeApp(ctk.CTk):
         else:
             self.color_mode.set("bw")
         for s in (
+            self.s_denoise,
+            self.s_turdsize,
+            self.s_opttolerance,
             self.max_side,
             self.edge_strength,
             self.denoise,
@@ -405,27 +473,50 @@ class VectorForgeApp(ctk.CTk):
 
     def _collect_overrides(self) -> dict[str, Any]:
         cm = self.color_mode.get()
-        o: dict[str, Any] = {
-            "max_process_size": clamp_process_size(self.max_side.get()),
-            "edge_strength": float(self.edge_strength.get()),
-            "denoise": float(self.denoise.get()),
-            "contrast": float(self.contrast.get()),
-            "blacklevel": float(self.blacklevel.get()),
-            "threshold_method": self.threshold_method.get(),
-            "turdsize": int(round(self.turdsize.get())),
-            "alphamax": float(self.alphamax.get()),
-            "opttolerance": float(self.opttolerance.get()),
-            "stroke_width": float(self.stroke_width.get()),
-            "filter_speckle": int(round(self.filter_speckle.get())),
-            "color_precision": int(round(self.color_precision.get())),
-            "layer_difference": int(round(self.layer_difference.get())),
-            "corner_threshold": int(round(self.corner_threshold.get())),
-            "path_precision": int(round(self.path_precision.get())),
-            "invert": bool(self.invert_var.get()),
-            "outer_and_counters_only": bool(self.outer_only_var.get()),
-            "logo_text": True,
-            "color_mode": cm,
-        }
+        simple = self._ui_mode.get() == "simple"
+
+        if simple:
+            o: dict[str, Any] = {
+                "denoise": float(self.s_denoise.get()),
+                "turdsize": int(round(self.s_turdsize.get())),
+                "opttolerance": float(self.s_opttolerance.get()),
+                "silhouette": bool(self.s_silhouette.get()),
+                "outer_and_counters_only": True,
+                "logo_text": True,
+                "color_mode": cm,
+                "edge_strength": 0.20,
+                "contrast": 0.22,
+                "blacklevel": 0.50,
+                "threshold_method": "otsu",
+                "alphamax": 0.65,
+                "stroke_width": 1.0,
+                "invert": False,
+                "max_process_size": 3600,
+            }
+        else:
+            o = {
+                "max_process_size": clamp_process_size(self.max_side.get()),
+                "edge_strength": float(self.edge_strength.get()),
+                "denoise": float(self.denoise.get()),
+                "contrast": float(self.contrast.get()),
+                "blacklevel": float(self.blacklevel.get()),
+                "threshold_method": self.threshold_method.get(),
+                "turdsize": int(round(self.turdsize.get())),
+                "alphamax": float(self.alphamax.get()),
+                "opttolerance": float(self.opttolerance.get()),
+                "stroke_width": float(self.stroke_width.get()),
+                "filter_speckle": int(round(self.filter_speckle.get())),
+                "color_precision": int(round(self.color_precision.get())),
+                "layer_difference": int(round(self.layer_difference.get())),
+                "corner_threshold": int(round(self.corner_threshold.get())),
+                "path_precision": int(round(self.path_precision.get())),
+                "invert": bool(self.invert_var.get()),
+                "outer_and_counters_only": bool(self.outer_only_var.get()),
+                "silhouette": bool(self.silhouette_var.get()),
+                "logo_text": True,
+                "color_mode": cm,
+            }
+
         if cm == "outline":
             o["engine"] = "potrace"
             o["output_style"] = "outline"
@@ -487,7 +578,6 @@ class VectorForgeApp(ctk.CTk):
         self._reset_view()
 
     def _on_wheel(self, event) -> None:
-        # Windows: event.delta is ±120
         factor = 1.15 if event.delta > 0 else 1 / 1.15
         self._zoom = float(max(0.1, min(20.0, self._zoom * factor)))
         self._redraw()
@@ -523,7 +613,6 @@ class VectorForgeApp(ctk.CTk):
         brush_overlay: list[tuple[float, float]] | None = None,
     ) -> None:
         self.drop_hint.place_forget()
-        self._view_img = img
         self.canvas.update_idletasks()
         cw = max(100, self.canvas.winfo_width())
         ch = max(100, self.canvas.winfo_height())
@@ -533,7 +622,10 @@ class VectorForgeApp(ctk.CTk):
         scale = fit * self._zoom
         dw, dh = max(1, int(w * scale)), max(1, int(h * scale))
 
-        preview = img.resize((dw, dh), Image.Resampling.NEAREST if scale > 2 else Image.Resampling.BILINEAR)
+        preview = img.resize(
+            (dw, dh),
+            Image.Resampling.NEAREST if scale > 2 else Image.Resampling.BILINEAR,
+        )
         if preview.mode == "RGBA":
             bg = Image.new("RGBA", preview.size, (40, 40, 44, 255))
             preview = Image.alpha_composite(bg, preview).convert("RGB")
@@ -590,37 +682,12 @@ class VectorForgeApp(ctk.CTk):
 
     def _on_canvas_press(self, event) -> None:
         mode = self._view_mode.get()
-        # Pan with left-drag when not using brush on source
         if mode != "source" or self.bg_tool.get() != "brush":
             self._panning = True
             self._drag_start = (event.x, event.y)
             return
-
         if self._busy or self._active_image() is None:
             return
-        tool = self.bg_tool.get()
-        # Approximate image coords ignoring pan for brush (simplified)
-        if tool == "brush":
-            # map using current zoom — approximate centre-based
-            img = self._active_image()
-            if img is None:
-                return
-            self.canvas.update_idletasks()
-            cw = max(100, self.canvas.winfo_width())
-            ch = max(100, self.canvas.winfo_height())
-            w, h = img.size
-            fit = min(cw / w, ch / h, 1.0) * 0.92
-            scale = fit * self._zoom
-            cx = cw / 2 + self._pan_x
-            cy = ch / 2 + self._pan_y
-            px = (event.x - cx) / scale + w / 2
-            py = (event.y - cy) / scale + h / 2
-            if 0 <= px < w and 0 <= py < h:
-                self._brush_points = [(px, py)]
-                self._redraw()
-            return
-
-        # wand click
         img = self._active_image()
         if img is None:
             return
@@ -636,16 +703,17 @@ class VectorForgeApp(ctk.CTk):
         py = (event.y - cy) / scale + h / 2
         if not (0 <= px < w and 0 <= py < h):
             return
+        if self.bg_tool.get() == "brush":
+            self._brush_points = [(px, py)]
+            self._redraw()
+            return
         erase = self.bg_tool.get() != "restore"
 
         def job() -> None:
             base = self._active_image()
             assert base is not None
             out = wand_at(
-                base,
-                px,
-                py,
-                erase=erase,
+                base, px, py, erase=erase,
                 tolerance=int(round(self.tolerance.get())),
             )
             self._subject = out
@@ -662,10 +730,7 @@ class VectorForgeApp(ctk.CTk):
             self._drag_start = (event.x, event.y)
             self._redraw()
             return
-
-        if self.bg_tool.get() != "brush" or self._busy:
-            return
-        if self._view_mode.get() != "source":
+        if self.bg_tool.get() != "brush" or self._busy or self._view_mode.get() != "source":
             return
         img = self._active_image()
         if img is None:
@@ -732,7 +797,7 @@ class VectorForgeApp(ctk.CTk):
         self._view_mode.set("source")
         self._reset_view()
         self.stats.configure(text=f"Loaded {img.width}×{img.height}\n{Path(path).name}")
-        self._set_status(f"Loaded {Path(path).name} — CNC Outline → Vectorize")
+        self._set_status(f"Loaded {Path(path).name}")
 
     def _auto_bg(self) -> None:
         if self._source is None:
@@ -776,7 +841,7 @@ class VectorForgeApp(ctk.CTk):
                 img,
                 VectorizeParams(
                     preset_id=preset,
-                    max_process_size=overrides["max_process_size"],
+                    max_process_size=overrides.get("max_process_size", 3600),
                     overrides=overrides,
                 ),
                 on_progress=prog,
@@ -798,10 +863,7 @@ class VectorForgeApp(ctk.CTk):
                         f"{result.duration_ms} ms · {preset}"
                     )
                 )
-                warn = f" | {result.warning}" if result.warning else ""
-                self._set_status(
-                    f"Done. Check Binary mask if letters look wrong{warn}"
-                )
+                self._set_status("Done — check Binary mask if letters look wrong")
                 self.progress.set(1.0)
 
             self.after(0, done)
