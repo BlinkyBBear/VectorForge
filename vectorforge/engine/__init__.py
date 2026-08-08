@@ -5,6 +5,7 @@ from .vectorize import vectorize_image, VectorizeParams, VectorResult
 from .image_ops import load_image, downsample_image
 from .dxf_export import svg_to_dxf, save_dxf
 from .svg_render import render_svg_preview
+from .quality_check import analyze_svg_quality
 
 __all__ = [
     "clamp_process_size",
@@ -25,4 +26,5 @@ __all__ = [
     "svg_to_dxf",
     "save_dxf",
     "render_svg_preview",
+    "analyze_svg_quality",
 ]

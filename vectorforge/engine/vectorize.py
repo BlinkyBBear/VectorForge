@@ -1,7 +1,7 @@
 """
-VectorForge v1.0 pipeline.
+VectorForge pipeline.
 
-CNC / Logo / B&W → preprocess (logo text morph) → Potrace
+CNC / Logo / B&W → preprocess (highpass + scale + logo morph) → Potrace
 Colour / Photo    → preprocess → vtracer
 """
 
@@ -28,6 +28,7 @@ from .preprocess import (
     preprocess_color_for_vtracer,
 )
 from .presets import DEFAULT_PRESET_ID, apply_preset
+from .quality_check import QualityReport, analyze_svg_quality
 
 ProgressCb = Callable[[str, float], None]
 
@@ -51,8 +52,10 @@ class VectorResult:
     params: dict[str, Any]
     warning: str | None = None
     preprocess_note: str = ""
-    preview_png: Image.Image | None = None  # binary mask preview
+    preview_png: Image.Image | None = None
     engine: str = "potrace"
+    quality_tip: str = ""
+    quality: QualityReport | None = None
 
 
 def _count_svg_stats(svg: str) -> tuple[int, int]:
@@ -138,8 +141,19 @@ def vectorize_image(
     svg: str
 
     if engine == "potrace":
-        report("Preprocess (logo/text binary)", 0.15)
-        preview_img, binary = preprocess_binary_for_potrace(
+        report("Preprocess (mkbitmap)", 0.15)
+        raw_sf = vt.get("scale_factor", None)
+        try:
+            raw_sf_f = float(raw_sf) if raw_sf is not None else 0.0
+        except (TypeError, ValueError):
+            raw_sf_f = 0.0
+        auto_scale = bool(vt.get("auto_scale", raw_sf_f < 1.01))
+        hp = vt.get("highpass_radius", None)
+        if hp is None and "edge_strength" in vt:
+            # leave None so preprocess maps edge_strength → radius
+            pass
+
+        preview_img, binary, pre_meta = preprocess_binary_for_potrace(
             work,
             denoise=float(vt.get("denoise", 0.40)),
             contrast=float(vt.get("contrast", 0.25)),
@@ -148,7 +162,14 @@ def vectorize_image(
             blacklevel=float(vt.get("blacklevel", 0.5)),
             invert=bool(vt.get("invert", False)),
             logo_text=bool(vt.get("logo_text", True)),
+            highpass_radius=float(hp) if hp is not None else None,
+            scale_factor=raw_sf_f if raw_sf_f >= 1.01 else None,
+            auto_scale=auto_scale,
         )
+        vt["highpass_radius"] = pre_meta["highpass_radius"]
+        vt["scale_factor"] = pre_meta["scale_factor"]
+        vt["binary_size"] = pre_meta["binary_size"]
+
         report("Potrace", 0.5)
         pkwargs = potrace_params_from_ui(vt)
         style = str(vt.get("output_style", "outline"))
@@ -198,6 +219,11 @@ def vectorize_image(
     else:
         svg = meta + svg
 
+    quality = analyze_svg_quality(svg)
+    if quality.path_count:
+        path_count = quality.path_count
+        node_estimate = quality.node_estimate
+
     ms = int((time.perf_counter() - t0) * 1000)
     report("Done", 1.0)
 
@@ -214,6 +240,8 @@ def vectorize_image(
         preprocess_note=describe_preprocess(vt),
         preview_png=preview_img,
         engine=engine,
+        quality_tip=quality.tip,
+        quality=quality,
     )
 
 

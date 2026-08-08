@@ -1,6 +1,14 @@
 # Changelog
 
-## [1.0.0] — 2026-08-08
+## [1.0.1] — 2026-08-08
+
+### Added
+- **Highpass radius** (0–12 px) and **Scale factor** (1–4×) in Advanced → Raster prep
+- Binary mask preview reflects highpass/scale after Vectorize
+- Post-vectorize **laser-ready / warning tip** on status + stats
+- Simple mode: auto scale (~1700px) + default highpass 3.5
+
+[1.0.0] — 2026-08-08
 
 ### Added
 - **Potrace-first architecture** for CNC Outline / Logo / Laser B&W

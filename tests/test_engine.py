@@ -44,7 +44,7 @@ class MemoryTests(unittest.TestCase):
 class PreprocessTests(unittest.TestCase):
     def test_not_flooded(self) -> None:
         img = _kelpie_like(400)
-        preview, binary = preprocess_binary_for_potrace(img)
+        preview, binary, meta = preprocess_binary_for_potrace(img)
         ink = (binary < 128).mean()
         # ink should be minority (diamond ring + figures), not near 100%
         self.assertLess(ink, 0.55)
@@ -105,3 +105,25 @@ class AcceptanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QualityAndRasterTests(unittest.TestCase):
+    def test_highpass_scale_meta(self) -> None:
+        from vectorforge.engine.preprocess import preprocess_binary_for_potrace
+        img = _kelpie_like(200)
+        _, b1, m1 = preprocess_binary_for_potrace(
+            img, highpass_radius=0, scale_factor=1.0, auto_scale=False
+        )
+        _, b2, m2 = preprocess_binary_for_potrace(
+            img, highpass_radius=5, scale_factor=2.0, auto_scale=False
+        )
+        self.assertEqual(m1["scale_factor"], 1.0)
+        self.assertAlmostEqual(m2["scale_factor"], 2.0)
+        self.assertGreater(b2.size, b1.size)
+
+    def test_quality_tip(self) -> None:
+        from vectorforge.engine.quality_check import analyze_svg_quality
+        r = analyze_svg_quality(
+            '<svg><path d="M0,0 L1,0 L1,1 L0,1 Z" stroke="#000" fill="none"/></svg>'
+        )
+        self.assertIn("Laser-ready", r.tip)

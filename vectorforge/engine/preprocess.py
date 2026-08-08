@@ -1,11 +1,11 @@
 """
-v1.0 preprocessing — mkbitmap-inspired + logo/text morphology.
+v1.0+ preprocessing — mkbitmap-inspired + logo/text morphology.
 
 Pipeline for CNC / logo outlines:
-  greyscale → denoise → highpass → contrast → scale UP → threshold
+  greyscale → denoise → highpass(radius) → contrast → scale UP (cubic) → threshold
   → mild close (keep letter strokes continuous) → despeckle → Potrace
 
-Yellow logo on black (or black on yellow) forced to pure binary with no grey fringe.
+Highpass radius and scale factor are user-controllable (Advanced Raster prep).
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from typing import Any
 import cv2
 import numpy as np
 from PIL import Image
+
+AUTO_SCALE_TARGET = 1700.0
 
 
 def flatten_rgba(img: Image.Image, bg=(255, 255, 255)) -> Image.Image:
@@ -29,9 +31,19 @@ def to_gray_u8(img: Image.Image) -> np.ndarray:
 
 
 def highpass(gray: np.ndarray, radius: float = 4.0) -> np.ndarray:
-    r = max(1.0, float(radius))
+    """
+    mkbitmap-style highpass. radius 0 = off.
+    Larger radius keeps thicker features; smaller isolates fine lines.
+    """
+    r = float(radius)
+    if r < 0.15:
+        return gray
+    r = max(0.5, r)
     k = int(r * 2) | 1
+    if k < 3:
+        k = 3
     blur = cv2.GaussianBlur(gray, (k, k), r)
+    # classic: original - blur + mid; mild boost like previous 1.5/-0.5
     hp = cv2.addWeighted(gray, 1.5, blur, -0.5, 128)
     return np.clip(hp, 0, 255).astype(np.uint8)
 
@@ -57,12 +69,37 @@ def enhance_contrast(gray: np.ndarray, amount: float) -> np.ndarray:
 
 
 def scale_greyscale(gray: np.ndarray, factor: float) -> np.ndarray:
+    """Cubic upscale of greyscale BEFORE threshold."""
     f = float(factor)
     if f <= 1.01:
         return gray
+    f = min(f, 4.0)
     h, w = gray.shape[:2]
     nw, nh = int(round(w * f)), int(round(h * f))
+    # safety cap
+    max_side = 6000
+    long = max(nw, nh)
+    if long > max_side:
+        s = max_side / long
+        nw = max(1, int(round(nw * s)))
+        nh = max(1, int(round(nh * s)))
     return cv2.resize(gray, (nw, nh), interpolation=cv2.INTER_CUBIC)
+
+
+def resolve_scale_factor(
+    width: int,
+    height: int,
+    scale_factor: float | None,
+    *,
+    auto: bool = True,
+) -> float:
+    """Explicit >= 1.01 wins; else auto toward ~1700px long side (1–4)."""
+    if scale_factor is not None and float(scale_factor) >= 1.01 and not auto:
+        return float(np.clip(float(scale_factor), 1.0, 4.0))
+    if scale_factor is not None and float(scale_factor) >= 1.01:
+        return float(np.clip(float(scale_factor), 1.0, 4.0))
+    side = max(width, height, 1)
+    return float(np.clip(AUTO_SCALE_TARGET / side, 1.0, 4.0))
 
 
 def threshold_hard(
@@ -72,10 +109,7 @@ def threshold_hard(
     blacklevel: float = 0.5,
     invert: bool = False,
 ) -> np.ndarray:
-    """
-    Pure binary: 0 = ink, 255 = background.
-    Forces no grey fringe (important for yellow signs / black text).
-    """
+    """Pure binary: 0 = ink, 255 = background."""
     method = (method or "otsu").lower()
     if method == "adaptive":
         ink_white = cv2.adaptiveThreshold(
@@ -85,7 +119,6 @@ def threshold_hard(
         thr = int(np.clip(blacklevel, 0.02, 0.98) * 255)
         _, ink_white = cv2.threshold(gray, thr, 255, cv2.THRESH_BINARY_INV)
     else:
-        # Otsu then snap any residual midtones
         _, ink_white = cv2.threshold(
             gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
@@ -93,47 +126,30 @@ def threshold_hard(
     if invert:
         ink_white = cv2.bitwise_not(ink_white)
 
-    # Hard snap — kill grey fringe completely
     _, pure = cv2.threshold(ink_white, 127, 255, cv2.THRESH_BINARY)
-    # Convert to 0=ink, 255=bg
     return cv2.bitwise_not(pure)
 
 
 def logo_text_morphology(binary_bw: np.ndarray, denoise: float) -> np.ndarray:
-    """
-    binary_bw: 0=ink, 255=bg.
-
-    - Mild CLOSE so letter strokes (E bars, P bowl) stay continuous
-    - OPEN to kill speckles outside letters
-    - Stronger despeckle inside large black regions via connected-component size filter
-    """
+    """binary_bw: 0=ink, 255=bg. Mild close + open + CC despeckle."""
     s = float(np.clip(denoise, 0.0, 1.0))
-    # work in ink=255 space
     ink = cv2.bitwise_not(binary_bw)
 
-    # Mild close — reconnect broken letter strokes (1–2 px gaps)
     k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k_close, iterations=1)
 
-    # Open — remove external speckles
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
     ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k_open, iterations=1)
 
-    # Connected-component despeckle: drop tiny black islands
-    # Keep components above a size floor (stronger when denoise high)
-    min_area = int(8 + s * 40)  # ~8–48 px
+    min_area = int(8 + s * 40)
     n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
     cleaned = np.zeros_like(ink)
     for i in range(1, n_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area >= min_area:
+        if stats[i, cv2.CC_STAT_AREA] >= min_area:
             cleaned[labels == i] = 255
     ink = cleaned
-
-    # One more light close after despeckle so letters stay solid
     ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k_close, iterations=1)
-
-    return cv2.bitwise_not(ink)  # back to 0=ink
+    return cv2.bitwise_not(ink)
 
 
 def preprocess_binary_for_potrace(
@@ -146,26 +162,44 @@ def preprocess_binary_for_potrace(
     blacklevel: float = 0.5,
     invert: bool = False,
     scale_factor: float | None = None,
+    highpass_radius: float | None = None,
+    auto_scale: bool = True,
     logo_text: bool = True,
-) -> tuple[Image.Image, np.ndarray]:
+) -> tuple[Image.Image, np.ndarray, dict[str, Any]]:
     """
-    Returns (binary preview RGB for UI, binary array 0=ink for Potrace).
+    Returns (binary preview RGB, binary 0=ink, meta with applied hp/scale).
+
+    highpass_radius: px, 0 = off. If None, derived from edge_strength (legacy).
+    scale_factor: 1–4 explicit; if None/0 and auto_scale, target ~1700px.
     """
     gray = to_gray_u8(img)
     gray = denoise_gray(gray, denoise)
 
-    if edge_strength > 0.08:
-        radius = 2.0 + edge_strength * 5.0
-        gray = highpass(gray, radius=radius)
+    # Highpass radius (explicit Advanced control, or legacy edge_strength mapping)
+    if highpass_radius is None:
+        if edge_strength > 0.08:
+            hp_r = 2.0 + float(edge_strength) * 5.0  # ~2–7
+        else:
+            hp_r = 0.0
+    else:
+        hp_r = float(np.clip(float(highpass_radius), 0.0, 12.0))
+
+    if hp_r > 0.1:
+        gray = highpass(gray, radius=hp_r)
 
     gray = enhance_contrast(gray, contrast)
 
     h, w = gray.shape[:2]
-    side = max(h, w)
-    if scale_factor is None:
-        target = 1800.0  # a bit more resolution for text
-        scale_factor = float(np.clip(target / max(side, 1), 1.0, 4.0))
-    gray = scale_greyscale(gray, scale_factor)
+    if scale_factor is not None and float(scale_factor) >= 1.01:
+        # Explicit Advanced scale factor
+        sf = resolve_scale_factor(w, h, float(scale_factor), auto=False)
+    elif auto_scale:
+        # Simple mode / default: grow toward ~1700px
+        sf = resolve_scale_factor(w, h, None, auto=True)
+    else:
+        # Explicit 1.0 (or missing) with auto_scale off
+        sf = 1.0
+    gray = scale_greyscale(gray, sf)
 
     binary = threshold_hard(
         gray,
@@ -177,23 +211,27 @@ def preprocess_binary_for_potrace(
     if logo_text:
         binary = logo_text_morphology(binary, denoise)
     else:
-        # light open only
         if denoise > 0.15:
             ink = cv2.bitwise_not(binary)
             k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
             ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k, iterations=1)
             binary = cv2.bitwise_not(ink)
 
-    # Auto-invert if ink dominates
     ink_frac = float(np.mean(binary < 128))
     if ink_frac > 0.55 and not invert:
         binary = cv2.bitwise_not(binary)
+        ink_frac = 1.0 - ink_frac
 
-    # Final hard snap — zero grey
     _, binary = cv2.threshold(binary, 127, 255, cv2.THRESH_BINARY)
 
     preview = Image.fromarray(cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB), "RGB")
-    return preview, binary
+    meta = {
+        "highpass_radius": round(hp_r, 2),
+        "scale_factor": round(float(sf), 3),
+        "binary_size": (int(binary.shape[1]), int(binary.shape[0])),
+        "ink_fraction": round(ink_frac, 4),
+    }
+    return preview, binary, meta
 
 
 def preprocess_color_for_vtracer(
@@ -243,7 +281,8 @@ def describe_preprocess(params: dict[str, Any]) -> str:
     eng = params.get("engine", "?")
     return (
         f"engine={eng} thr={params.get('threshold_method', '-')} "
-        f"edge={float(params.get('edge_strength', 0)):.2f} "
+        f"hp={float(params.get('highpass_radius', 0)):.1f} "
+        f"scale={float(params.get('scale_factor', 1)):.2f} "
         f"denoise={float(params.get('denoise', 0)):.2f} "
         f"contrast={float(params.get('contrast', 0)):.2f}"
     )

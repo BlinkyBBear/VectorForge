@@ -167,7 +167,13 @@ class VectorForgeApp(ctk.CTk):
         self.max_side, _ = self._slider(
             self._advanced_frame, "Max process size", 800, HARD_MAX_PROCESS_SIZE, 3600, int_mode=True
         )
-        self.edge_strength, _ = self._slider(self._advanced_frame, "Edge / highpass", 0, 1, 0.20)
+        self.highpass_radius, _ = self._slider(
+            self._advanced_frame, "Highpass radius (px)", 0, 12, 3.5
+        )
+        self.scale_factor, _ = self._slider(
+            self._advanced_frame, "Scale factor (pre-threshold)", 1.0, 4.0, 2.0
+        )
+        self.edge_strength, _ = self._slider(self._advanced_frame, "Edge boost", 0, 1, 0.20)
         self.denoise, _ = self._slider(self._advanced_frame, "Denoise", 0, 1, 0.45)
         self.contrast, _ = self._slider(self._advanced_frame, "Contrast", 0, 1, 0.22)
         self.blacklevel, _ = self._slider(self._advanced_frame, "Black level", 0.05, 0.95, 0.50)
@@ -424,6 +430,8 @@ class VectorForgeApp(ctk.CTk):
         self.s_opttolerance.set(p.get("opttolerance", 0.60))
         # advanced
         self.max_side.set(p.get("max_process_size", 3600))
+        self.highpass_radius.set(float(p.get("highpass_radius", 3.5)))
+        self.scale_factor.set(max(1.0, float(p.get("scale_factor", 2.0) or 2.0)))
         self.edge_strength.set(p.get("edge_strength", 0.20))
         self.denoise.set(p.get("denoise", 0.45))
         self.contrast.set(p.get("contrast", 0.22))
@@ -453,6 +461,8 @@ class VectorForgeApp(ctk.CTk):
             self.s_turdsize,
             self.s_opttolerance,
             self.max_side,
+            self.highpass_radius,
+            self.scale_factor,
             self.edge_strength,
             self.denoise,
             self.contrast,
@@ -485,6 +495,9 @@ class VectorForgeApp(ctk.CTk):
                 "logo_text": True,
                 "color_mode": cm,
                 "edge_strength": 0.20,
+                "highpass_radius": 3.5,
+                "scale_factor": 0.0,
+                "auto_scale": True,
                 "contrast": 0.22,
                 "blacklevel": 0.50,
                 "threshold_method": "otsu",
@@ -496,6 +509,9 @@ class VectorForgeApp(ctk.CTk):
         else:
             o = {
                 "max_process_size": clamp_process_size(self.max_side.get()),
+                "highpass_radius": float(self.highpass_radius.get()),
+                "scale_factor": float(self.scale_factor.get()),
+                "auto_scale": False,
                 "edge_strength": float(self.edge_strength.get()),
                 "denoise": float(self.denoise.get()),
                 "contrast": float(self.contrast.get()),
@@ -853,17 +869,22 @@ class VectorForgeApp(ctk.CTk):
             def done() -> None:
                 self._vector_preview = vp
                 self._binary_preview = bp
-                self._view_mode.set("vector")
+                # Binary mask reflects highpass/scale; switch to Vector paths as needed
+                self._view_mode.set("binary" if bp is not None else "vector")
                 self._reset_view()
+                tip = getattr(result, "quality_tip", "") or ""
+                hp = result.params.get("highpass_radius", "?")
+                sf = result.params.get("scale_factor", "?")
                 self.stats.configure(
                     text=(
                         f"paths: {result.path_count}  nodes~{result.node_estimate}\n"
                         f"engine: {result.engine}  {result.process_label}\n"
-                        f"{result.preprocess_note}\n"
+                        f"hp={hp} scale={sf}\n"
+                        f"{tip}\n"
                         f"{result.duration_ms} ms · {preset}"
                     )
                 )
-                self._set_status("Done — check Binary mask if letters look wrong")
+                self._set_status(tip or "Done — check Binary mask if letters look wrong")
                 self.progress.set(1.0)
 
             self.after(0, done)
