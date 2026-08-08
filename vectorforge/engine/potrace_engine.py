@@ -1,8 +1,9 @@
 """
 Potrace-based outline engine (v1.0).
 
-Includes optional outer+counters filter: keep large outer paths and
-meaningful holes, drop tiny junk paths that break letter quality.
+Modes:
+- outer_and_counters_only: drop tiny junk
+- silhouette: keep large outer shapes + letter counters; drop internal detail
 """
 
 from __future__ import annotations
@@ -96,11 +97,14 @@ def potrace_binary_to_svg(
     filter_border: bool = True,
     blacklevel: float = 0.5,
     outer_and_counters_only: bool = True,
+    silhouette: bool = False,
     min_path_area: float = 40.0,
 ) -> tuple[str, PathStats]:
     """
-    binary_bw: dark = ink.
-    outer_and_counters_only: drop tiny junk paths; keep outer shapes + letter counters.
+    silhouette=True: aggressive filter for CNC cut-out silhouettes.
+      - Keep large outer paths
+      - Keep medium holes (letter counters in P, A, O, etc.)
+      - Drop small/medium internal detail (dog fur lines, ear internals)
     """
     if isinstance(binary_bw, Image.Image):
         gray = np.array(binary_bw.convert("L"), dtype=np.uint8)
@@ -112,7 +116,6 @@ def potrace_binary_to_svg(
 
     h, w = gray.shape[:2]
 
-    # Force pure binary
     _, pure = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
     gray = pure
 
@@ -131,14 +134,13 @@ def potrace_binary_to_svg(
     total_nodes = 0
     path_count = 0
 
-    # Collect paths with area for optional filtering
-    candidates: list[tuple[float, str, int]] = []
+    candidates: list[tuple[float, int, str, int]] = []  # area, sign, d, nodes
 
     for curve in traced:
         area = abs(float(getattr(curve._path, "area", 0)))
+        sign = int(getattr(curve._path, "sign", 1) or 1)
         bbox_area = _path_bbox_area(curve)
 
-        # Drop near-full-image border artifacts
         if filter_border and (
             area > img_area * 0.92 or bbox_area > img_area * 0.98
         ):
@@ -148,12 +150,46 @@ def potrace_binary_to_svg(
         if not d:
             continue
 
-        if outer_and_counters_only and area < min_path_area:
-            continue
+        candidates.append((area, sign, d, nodes))
 
-        candidates.append((area, d, nodes))
+    if not candidates:
+        svg = (
+            f'<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<svg xmlns="http://www.w3.org/2000/svg" '
+            f'width="{w}" height="{h}" viewBox="0 0 {w} {h}">\n'</svg>\n'
+        )
+        return svg, PathStats(0, 0)
 
-    for area, d, nodes in candidates:
+    areas = sorted([c[0] for c in candidates], reverse=True)
+    largest = areas[0] if areas else 1.0
+
+    if silhouette:
+        # Outer shapes: area >= 1.5% of image OR >= 8% of largest path
+        outer_floor = max(min_path_area * 3, img_area * 0.008, largest * 0.06)
+        # Letter counters / holes: smaller but not tiny
+        hole_floor = max(min_path_area, img_area * 0.0008, largest * 0.004)
+        kept: list[tuple[float, str, int]] = []
+        for area, sign, d, nodes in candidates:
+            # sign < 0 often means hole in Potrace
+            is_hole = sign < 0
+            if is_hole:
+                if area >= hole_floor:
+                    kept.append((area, d, nodes))
+            else:
+                if area >= outer_floor:
+                    kept.append((area, d, nodes))
+                # also keep fairly large positive paths (separate objects)
+                elif area >= largest * 0.04 and area >= min_path_area * 2:
+                    kept.append((area, d, nodes))
+        candidates_kept = kept
+    elif outer_and_counters_only:
+        candidates_kept = [
+            (a, d, n) for a, _s, d, n in candidates if a >= min_path_area
+        ]
+    else:
+        candidates_kept = [(a, d, n) for a, _s, d, n in candidates]
+
+    for area, d, nodes in candidates_kept:
         total_nodes += nodes
         path_count += 1
         if style == "outline":
@@ -198,5 +234,6 @@ def potrace_params_from_ui(params: dict[str, Any]) -> dict[str, Any]:
         "stroke_width": float(params.get("stroke_width", 1.0)),
         "blacklevel": float(params.get("blacklevel", 0.5)),
         "outer_and_counters_only": bool(params.get("outer_and_counters_only", True)),
+        "silhouette": bool(params.get("silhouette", False)),
         "min_path_area": float(params.get("min_path_area", 40.0)),
     }
