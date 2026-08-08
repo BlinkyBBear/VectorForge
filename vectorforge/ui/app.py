@@ -1,7 +1,9 @@
 """
-VectorForge v1.0 desktop UI — CustomTkinter.
+VectorForge v1.0 desktop UI.
 
-Live SVG path preview · mode-aware control visibility · SVG+DXF export.
+- Binary mask preview (what Potrace actually traces)
+- Zoom (mouse wheel) + pan (drag) on all previews
+- Mode-aware control visibility
 """
 
 from __future__ import annotations
@@ -43,13 +45,20 @@ class VectorForgeApp(ctk.CTk):
         self._subject: Image.Image | None = None
         self._svg_text: str | None = None
         self._vector_preview: Image.Image | None = None
+        self._binary_preview: Image.Image | None = None
         self._photo: ImageTk.PhotoImage | None = None
         self._busy = False
         self._brush_points: list[tuple[float, float]] = []
         self._source_path: Path | None = None
-        self._preview_scale = 1.0
-        self._preview_size = (1, 1)
-        self._canvas_size = (800, 600)
+
+        # Zoom / pan state (applies to current view image)
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._drag_start: tuple[int, int] | None = None
+        self._panning = False
+        self._view_img: Image.Image | None = None  # full-res image currently shown
+
         self._view_mode = ctk.StringVar(value="source")
 
         self._build()
@@ -117,14 +126,14 @@ class VectorForgeApp(ctk.CTk):
             ).pack(side="left", padx=3)
 
         self._section(side, "Max process size (px)")
-        self.max_side, self.max_side_val = self._slider(
+        self.max_side, _ = self._slider(
             side, "Max process size", 800, HARD_MAX_PROCESS_SIZE, 3600, int_mode=True
         )
 
         self._section(side, "Preprocess")
-        self.edge_strength, _ = self._slider(side, "Edge strength", 0, 1, 0.35)
-        self.denoise, _ = self._slider(side, "Denoise", 0, 1, 0.22)
-        self.contrast, _ = self._slider(side, "Contrast", 0, 1, 0.30)
+        self.edge_strength, _ = self._slider(side, "Edge strength", 0, 1, 0.25)
+        self.denoise, _ = self._slider(side, "Denoise", 0, 1, 0.40)
+        self.contrast, _ = self._slider(side, "Contrast", 0, 1, 0.25)
         self.blacklevel, _ = self._slider(side, "Black level", 0.05, 0.95, 0.50)
         self.threshold_method = ctk.StringVar(value="otsu")
         ctk.CTkLabel(side, text="Threshold method", anchor="w").pack(
@@ -136,18 +145,17 @@ class VectorForgeApp(ctk.CTk):
             values=["otsu", "fixed", "adaptive"],
         ).pack(fill="x", padx=12, pady=2)
 
-        # Potrace section (always relevant for outline/B&W)
         self._potrace_frame = ctk.CTkFrame(side, fg_color="transparent")
         self._potrace_frame.pack(fill="x")
         self._section(self._potrace_frame, "Potrace (outline / B&W)")
         self.turdsize, _ = self._slider(
-            self._potrace_frame, "Turd size (despeckle)", 0, 20, 8, int_mode=True
+            self._potrace_frame, "Turd size (despeckle)", 0, 20, 10, int_mode=True
         )
         self.alphamax, _ = self._slider(
-            self._potrace_frame, "Corner threshold α", 0, 1.34, 0.90
+            self._potrace_frame, "Corner threshold α", 0, 1.34, 0.70
         )
         self.opttolerance, _ = self._slider(
-            self._potrace_frame, "Curve optimize", 0.05, 1.0, 0.40
+            self._potrace_frame, "Curve optimize", 0.05, 1.0, 0.55
         )
         self.stroke_width, _ = self._slider(
             self._potrace_frame, "Stroke width (outline)", 0.25, 4, 1.0
@@ -155,9 +163,14 @@ class VectorForgeApp(ctk.CTk):
         self.invert_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             self._potrace_frame, text="Invert ink", variable=self.invert_var
-        ).pack(anchor="w", padx=12, pady=4)
+        ).pack(anchor="w", padx=12, pady=2)
+        self.outer_only_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            self._potrace_frame,
+            text="Outer + counters only (drop junk paths)",
+            variable=self.outer_only_var,
+        ).pack(anchor="w", padx=12, pady=2)
 
-        # Vtracer section — hidden unless Colour mode
         self._vtracer_frame = ctk.CTkFrame(side, fg_color="transparent")
         self._section(self._vtracer_frame, "Vtracer (colour only)")
         self.filter_speckle, _ = self._slider(
@@ -228,6 +241,7 @@ class VectorForgeApp(ctk.CTk):
         self.progress.set(0)
         self.progress.pack(fill="x", padx=12, pady=(0, 16))
 
+        # Main view
         main = ctk.CTkFrame(self, corner_radius=0)
         main.grid(row=0, column=1, sticky="nsew")
         main.grid_rowconfigure(1, weight=1)
@@ -238,6 +252,7 @@ class VectorForgeApp(ctk.CTk):
         ctk.CTkLabel(bar, text="Preview:").pack(side="left", padx=(4, 8))
         for val, lab in (
             ("source", "Original"),
+            ("binary", "Binary mask"),
             ("vector", "Vector paths"),
             ("split", "Split"),
         ):
@@ -246,14 +261,24 @@ class VectorForgeApp(ctk.CTk):
                 text=lab,
                 variable=self._view_mode,
                 value=val,
-                command=self._redraw,
-            ).pack(side="left", padx=6)
+                command=self._on_view_change,
+            ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            bar, text="Reset view", width=80, command=self._reset_view, fg_color="gray30"
+        ).pack(side="right", padx=4)
+        ctk.CTkLabel(
+            bar, text="Wheel=zoom  Drag=pan", text_color="gray55", font=ctk.CTkFont(size=11)
+        ).pack(side="right", padx=8)
 
         self.canvas = ctk.CTkCanvas(main, bg="#1a1a1c", highlightthickness=0)
         self.canvas.grid(row=1, column=0, sticky="nsew")
-        self.canvas.bind("<Button-1>", self._on_canvas_click)
+        self.canvas.bind("<Button-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        self.canvas.bind("<MouseWheel>", self._on_wheel)  # Windows
+        self.canvas.bind("<Button-4>", lambda e: self._on_wheel_linux(e, 1))
+        self.canvas.bind("<Button-5>", lambda e: self._on_wheel_linux(e, -1))
         self.canvas.bind("<Configure>", lambda _e: self._redraw())
 
         self.status = ctk.CTkLabel(
@@ -264,8 +289,8 @@ class VectorForgeApp(ctk.CTk):
         self.drop_hint = ctk.CTkLabel(
             self.canvas,
             text=(
-                "Open image → CNC Outline → Vectorize → see actual paths → Export SVG/DXF\n"
-                "Optimised for sheet-metal cut-outs · Fusion 360 · xTool · LightBurn"
+                "Open image → CNC Outline → Vectorize\n"
+                "Binary mask = what Potrace traces · Wheel zoom · Drag pan"
             ),
             font=ctk.CTkFont(size=14),
             text_color="gray60",
@@ -273,14 +298,10 @@ class VectorForgeApp(ctk.CTk):
         self.drop_hint.place(relx=0.5, rely=0.5, anchor="center")
 
     def _update_mode_visibility(self) -> None:
-        """Show only controls that affect the current mode."""
         cm = self.color_mode.get()
         if cm == "color":
             if not self._vtracer_frame.winfo_ismapped():
-                # pack after potrace frame
-                self._vtracer_frame.pack(
-                    fill="x", after=self._potrace_frame
-                )
+                self._vtracer_frame.pack(fill="x", after=self._potrace_frame)
         else:
             self._vtracer_frame.pack_forget()
 
@@ -338,14 +359,14 @@ class VectorForgeApp(ctk.CTk):
     def _apply_preset_to_controls(self, key: str) -> None:
         p = PRESETS[key]["params"]
         self.max_side.set(p.get("max_process_size", 3600))
-        self.edge_strength.set(p.get("edge_strength", 0.35))
-        self.denoise.set(p.get("denoise", 0.22))
-        self.contrast.set(p.get("contrast", 0.3))
+        self.edge_strength.set(p.get("edge_strength", 0.25))
+        self.denoise.set(p.get("denoise", 0.40))
+        self.contrast.set(p.get("contrast", 0.25))
         self.blacklevel.set(p.get("blacklevel", 0.5))
         self.threshold_method.set(p.get("threshold_method", "otsu"))
-        self.turdsize.set(p.get("turdsize", 8))
-        self.alphamax.set(p.get("alphamax", 0.9))
-        self.opttolerance.set(p.get("opttolerance", 0.4))
+        self.turdsize.set(p.get("turdsize", 10))
+        self.alphamax.set(p.get("alphamax", 0.7))
+        self.opttolerance.set(p.get("opttolerance", 0.55))
         self.stroke_width.set(p.get("stroke_width", 1.0))
         self.filter_speckle.set(p.get("filter_speckle", 4))
         self.color_precision.set(p.get("color_precision", 6))
@@ -401,6 +422,8 @@ class VectorForgeApp(ctk.CTk):
             "corner_threshold": int(round(self.corner_threshold.get())),
             "path_precision": int(round(self.path_precision.get())),
             "invert": bool(self.invert_var.get()),
+            "outer_and_counters_only": bool(self.outer_only_var.get()),
+            "logo_text": True,
             "color_mode": cm,
         }
         if cm == "outline":
@@ -454,61 +477,63 @@ class VectorForgeApp(ctk.CTk):
     def _active_image(self) -> Image.Image | None:
         return self._subject if self._subject is not None else self._source
 
+    def _reset_view(self) -> None:
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._redraw()
+
+    def _on_view_change(self) -> None:
+        self._reset_view()
+
+    def _on_wheel(self, event) -> None:
+        # Windows: event.delta is ±120
+        factor = 1.15 if event.delta > 0 else 1 / 1.15
+        self._zoom = float(max(0.1, min(20.0, self._zoom * factor)))
+        self._redraw()
+
+    def _on_wheel_linux(self, event, direction: int) -> None:
+        factor = 1.15 if direction > 0 else 1 / 1.15
+        self._zoom = float(max(0.1, min(20.0, self._zoom * factor)))
+        self._redraw()
+
     def _redraw(self) -> None:
         mode = self._view_mode.get()
         if mode == "vector" and self._vector_preview is not None:
-            self._show_image(self._vector_preview, is_vector=True)
+            self._show_zoomable(self._vector_preview, label="VECTOR PATHS")
+            return
+        if mode == "binary" and self._binary_preview is not None:
+            self._show_zoomable(self._binary_preview, label="BINARY MASK (what Potrace traces)")
             return
         if mode == "split" and self._vector_preview is not None and self._active_image():
             self._show_split(self._active_image(), self._vector_preview)
             return
         img = self._active_image()
         if img is not None:
-            self._show_image(
+            self._show_zoomable(
                 img,
                 brush_overlay=self._brush_points if self.bg_tool.get() == "brush" else None,
             )
 
-    def _show_split(self, left: Image.Image, right: Image.Image) -> None:
-        self.drop_hint.place_forget()
-        self.canvas.update_idletasks()
-        cw = max(100, self.canvas.winfo_width())
-        ch = max(100, self.canvas.winfo_height())
-        half = cw // 2 - 8
-
-        def fit(im: Image.Image) -> Image.Image:
-            w, h = im.size
-            sc = min(half / w, ch / h, 1.0) * 0.92
-            return im.resize(
-                (max(1, int(w * sc)), max(1, int(h * sc))), Image.Resampling.BILINEAR
-            ).convert("RGB")
-
-        L, R = fit(left), fit(right)
-        canvas_img = Image.new("RGB", (cw, ch), (26, 26, 28))
-        canvas_img.paste(L, (8, (ch - L.height) // 2))
-        canvas_img.paste(R, (half + 12, (ch - R.height) // 2))
-        draw = ImageDraw.Draw(canvas_img)
-        draw.line([(half + 4, 0), (half + 4, ch)], fill=(80, 80, 90), width=2)
-        self._photo = ImageTk.PhotoImage(canvas_img)
-        self.canvas.delete("all")
-        self.canvas.create_image(cw // 2, ch // 2, image=self._photo, anchor="center")
-        self._canvas_size = (cw, ch)
-
-    def _show_image(
+    def _show_zoomable(
         self,
         img: Image.Image,
+        *,
+        label: str | None = None,
         brush_overlay: list[tuple[float, float]] | None = None,
-        is_vector: bool = False,
     ) -> None:
         self.drop_hint.place_forget()
+        self._view_img = img
         self.canvas.update_idletasks()
         cw = max(100, self.canvas.winfo_width())
         ch = max(100, self.canvas.winfo_height())
-        w, h = img.size
-        scale = min(cw / w, ch / h, 1.0) * 0.96
-        dw, dh = max(1, int(w * scale)), max(1, int(h * scale))
-        preview = img.resize((dw, dh), Image.Resampling.BILINEAR)
 
+        w, h = img.size
+        fit = min(cw / w, ch / h, 1.0) * 0.92
+        scale = fit * self._zoom
+        dw, dh = max(1, int(w * scale)), max(1, int(h * scale))
+
+        preview = img.resize((dw, dh), Image.Resampling.NEAREST if scale > 2 else Image.Resampling.BILINEAR)
         if preview.mode == "RGBA":
             bg = Image.new("RGBA", preview.size, (40, 40, 44, 255))
             preview = Image.alpha_composite(bg, preview).convert("RGB")
@@ -528,28 +553,157 @@ class VectorForgeApp(ctk.CTk):
 
         self._photo = ImageTk.PhotoImage(preview)
         self.canvas.delete("all")
-        self.canvas.create_image(cw // 2, ch // 2, image=self._photo, anchor="center")
-        if is_vector:
+        cx = cw / 2 + self._pan_x
+        cy = ch / 2 + self._pan_y
+        self.canvas.create_image(cx, cy, image=self._photo, anchor="center")
+        if label:
             self.canvas.create_text(
-                12, 12, anchor="nw", fill="#8cf0a0", text="VECTOR PATHS (exported geometry)"
+                12, 12, anchor="nw", fill="#8cf0a0", text=f"{label}  ·  zoom {self._zoom:.2f}×"
             )
-        self._preview_scale = scale
-        self._preview_size = (dw, dh)
-        self._canvas_size = (cw, ch)
 
-    def _canvas_to_image(self, event_x: int, event_y: int):
+    def _show_split(self, left: Image.Image, right: Image.Image) -> None:
+        self.drop_hint.place_forget()
+        self.canvas.update_idletasks()
+        cw = max(100, self.canvas.winfo_width())
+        ch = max(100, self.canvas.winfo_height())
+        half = cw // 2 - 8
+
+        def fit(im: Image.Image) -> Image.Image:
+            w, h = im.size
+            sc = min(half / w, ch / h, 1.0) * 0.92 * self._zoom
+            return im.resize(
+                (max(1, int(w * sc)), max(1, int(h * sc))),
+                Image.Resampling.NEAREST if sc > 2 else Image.Resampling.BILINEAR,
+            ).convert("RGB")
+
+        L, R = fit(left), fit(right)
+        canvas_img = Image.new("RGB", (cw, ch), (26, 26, 28))
+        ox = int(self._pan_x)
+        oy = int(self._pan_y)
+        canvas_img.paste(L, (8 + ox, (ch - L.height) // 2 + oy))
+        canvas_img.paste(R, (half + 12 + ox, (ch - R.height) // 2 + oy))
+        draw = ImageDraw.Draw(canvas_img)
+        draw.line([(half + 4, 0), (half + 4, ch)], fill=(80, 80, 90), width=2)
+        self._photo = ImageTk.PhotoImage(canvas_img)
+        self.canvas.delete("all")
+        self.canvas.create_image(cw // 2, ch // 2, image=self._photo, anchor="center")
+
+    def _on_canvas_press(self, event) -> None:
+        mode = self._view_mode.get()
+        # Pan with left-drag when not using brush on source
+        if mode != "source" or self.bg_tool.get() != "brush":
+            self._panning = True
+            self._drag_start = (event.x, event.y)
+            return
+
+        if self._busy or self._active_image() is None:
+            return
+        tool = self.bg_tool.get()
+        # Approximate image coords ignoring pan for brush (simplified)
+        if tool == "brush":
+            # map using current zoom — approximate centre-based
+            img = self._active_image()
+            if img is None:
+                return
+            self.canvas.update_idletasks()
+            cw = max(100, self.canvas.winfo_width())
+            ch = max(100, self.canvas.winfo_height())
+            w, h = img.size
+            fit = min(cw / w, ch / h, 1.0) * 0.92
+            scale = fit * self._zoom
+            cx = cw / 2 + self._pan_x
+            cy = ch / 2 + self._pan_y
+            px = (event.x - cx) / scale + w / 2
+            py = (event.y - cy) / scale + h / 2
+            if 0 <= px < w and 0 <= py < h:
+                self._brush_points = [(px, py)]
+                self._redraw()
+            return
+
+        # wand click
         img = self._active_image()
-        if img is None or self._view_mode.get() != "source":
-            return None
-        cw, ch = self._canvas_size
-        dw, dh = self._preview_size
-        left = (cw - dw) / 2
-        top = (ch - dh) / 2
-        px = (event_x - left) / self._preview_scale
-        py = (event_y - top) / self._preview_scale
-        if px < 0 or py < 0 or px >= img.width or py >= img.height:
-            return None
-        return px, py
+        if img is None:
+            return
+        self.canvas.update_idletasks()
+        cw = max(100, self.canvas.winfo_width())
+        ch = max(100, self.canvas.winfo_height())
+        w, h = img.size
+        fit = min(cw / w, ch / h, 1.0) * 0.92
+        scale = fit * self._zoom
+        cx = cw / 2 + self._pan_x
+        cy = ch / 2 + self._pan_y
+        px = (event.x - cx) / scale + w / 2
+        py = (event.y - cy) / scale + h / 2
+        if not (0 <= px < w and 0 <= py < h):
+            return
+        erase = self.bg_tool.get() != "restore"
+
+        def job() -> None:
+            base = self._active_image()
+            assert base is not None
+            out = wand_at(
+                base,
+                px,
+                py,
+                erase=erase,
+                tolerance=int(round(self.tolerance.get())),
+            )
+            self._subject = out
+            self.after(0, self._redraw)
+
+        self._run_async(job)
+
+    def _on_canvas_drag(self, event) -> None:
+        if self._panning and self._drag_start is not None:
+            dx = event.x - self._drag_start[0]
+            dy = event.y - self._drag_start[1]
+            self._pan_x += dx
+            self._pan_y += dy
+            self._drag_start = (event.x, event.y)
+            self._redraw()
+            return
+
+        if self.bg_tool.get() != "brush" or self._busy:
+            return
+        if self._view_mode.get() != "source":
+            return
+        img = self._active_image()
+        if img is None:
+            return
+        self.canvas.update_idletasks()
+        cw = max(100, self.canvas.winfo_width())
+        ch = max(100, self.canvas.winfo_height())
+        w, h = img.size
+        fit = min(cw / w, ch / h, 1.0) * 0.92
+        scale = fit * self._zoom
+        cx = cw / 2 + self._pan_x
+        cy = ch / 2 + self._pan_y
+        px = (event.x - cx) / scale + w / 2
+        py = (event.y - cy) / scale + h / 2
+        if 0 <= px < w and 0 <= py < h:
+            self._brush_points.append((px, py))
+            if len(self._brush_points) % 2 == 0:
+                self._redraw()
+
+    def _on_canvas_release(self, event) -> None:
+        if self._panning:
+            self._panning = False
+            self._drag_start = None
+            return
+        if self.bg_tool.get() != "brush" or not self._brush_points:
+            return
+        pts = list(self._brush_points)
+        self._brush_points = []
+        radius = int(round(self.brush_radius.get()))
+
+        def job() -> None:
+            base = self._active_image()
+            assert base is not None
+            out = brush_stroke(base, pts, radius=radius, erase=True)
+            self._subject = out
+            self.after(0, self._redraw)
+
+        self._run_async(job)
 
     def _open_image(self) -> None:
         from tkinter import filedialog
@@ -573,11 +727,12 @@ class VectorForgeApp(ctk.CTk):
         self._subject = None
         self._svg_text = None
         self._vector_preview = None
+        self._binary_preview = None
         self._brush_points = []
         self._view_mode.set("source")
-        self._show_image(img)
+        self._reset_view()
         self.stats.configure(text=f"Loaded {img.width}×{img.height}\n{Path(path).name}")
-        self._set_status(f"Loaded {Path(path).name} — choose CNC Outline and Vectorize")
+        self._set_status(f"Loaded {Path(path).name} — CNC Outline → Vectorize")
 
     def _auto_bg(self) -> None:
         if self._source is None:
@@ -604,66 +759,6 @@ class VectorForgeApp(ctk.CTk):
         self._redraw()
         self._set_status("Subject reset")
 
-    def _on_canvas_click(self, event) -> None:
-        if self._busy or self._active_image() is None:
-            return
-        if self._view_mode.get() != "source":
-            return
-        tool = self.bg_tool.get()
-        pt = self._canvas_to_image(event.x, event.y)
-        if pt is None:
-            return
-        if tool == "brush":
-            self._brush_points = [pt]
-            self._show_image(self._active_image(), brush_overlay=self._brush_points)
-            return
-        erase = tool != "restore"
-
-        def job() -> None:
-            base = self._active_image()
-            assert base is not None
-            out = wand_at(
-                base,
-                pt[0],
-                pt[1],
-                erase=erase,
-                tolerance=int(round(self.tolerance.get())),
-            )
-            self._subject = out
-            self.after(0, self._redraw)
-
-        self._run_async(job)
-
-    def _on_canvas_drag(self, event) -> None:
-        if self.bg_tool.get() != "brush" or self._busy:
-            return
-        if self._view_mode.get() != "source":
-            return
-        pt = self._canvas_to_image(event.x, event.y)
-        if not pt:
-            return
-        self._brush_points.append(pt)
-        if len(self._brush_points) % 2 == 0:
-            base = self._active_image()
-            if base:
-                self._show_image(base, brush_overlay=self._brush_points)
-
-    def _on_canvas_release(self, event) -> None:
-        if self.bg_tool.get() != "brush" or not self._brush_points:
-            return
-        pts = list(self._brush_points)
-        self._brush_points = []
-        radius = int(round(self.brush_radius.get()))
-
-        def job() -> None:
-            base = self._active_image()
-            assert base is not None
-            out = brush_stroke(base, pts, radius=radius, erase=True)
-            self._subject = out
-            self.after(0, self._redraw)
-
-        self._run_async(job)
-
     def _vectorize(self) -> None:
         img = self._active_image()
         if img is None:
@@ -687,12 +782,14 @@ class VectorForgeApp(ctk.CTk):
                 on_progress=prog,
             )
             self._svg_text = result.svg
-            vp = render_svg_preview(result.svg, max_side=1200)
+            vp = render_svg_preview(result.svg, max_side=1400)
+            bp = result.preview_png
 
             def done() -> None:
                 self._vector_preview = vp
+                self._binary_preview = bp
                 self._view_mode.set("vector")
-                self._redraw()
+                self._reset_view()
                 self.stats.configure(
                     text=(
                         f"paths: {result.path_count}  nodes~{result.node_estimate}\n"
@@ -703,7 +800,7 @@ class VectorForgeApp(ctk.CTk):
                 )
                 warn = f" | {result.warning}" if result.warning else ""
                 self._set_status(
-                    f"Vectorized — viewing actual paths. Export SVG/DXF when ready{warn}"
+                    f"Done. Check Binary mask if letters look wrong{warn}"
                 )
                 self.progress.set(1.0)
 
