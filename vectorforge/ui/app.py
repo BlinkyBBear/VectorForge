@@ -1,7 +1,7 @@
 """
 VectorForge v1.0 desktop UI — CustomTkinter.
 
-Live SVG path preview after vectorize · scrollable controls · SVG+DXF export.
+Live SVG path preview · mode-aware control visibility · SVG+DXF export.
 """
 
 from __future__ import annotations
@@ -50,10 +50,11 @@ class VectorForgeApp(ctk.CTk):
         self._preview_scale = 1.0
         self._preview_size = (1, 1)
         self._canvas_size = (800, 600)
-        self._view_mode = ctk.StringVar(value="source")  # source | vector | split
+        self._view_mode = ctk.StringVar(value="source")
 
         self._build()
         self._apply_preset_to_controls(DEFAULT_PRESET_ID)
+        self._update_mode_visibility()
         self._set_status(rembg_status())
 
     def _build(self) -> None:
@@ -62,6 +63,7 @@ class VectorForgeApp(ctk.CTk):
 
         side = ctk.CTkScrollableFrame(self, width=360, corner_radius=0)
         side.grid(row=0, column=0, sticky="nsew")
+        self._side = side
 
         ctk.CTkLabel(
             side, text="VectorForge", font=ctk.CTkFont(size=22, weight="bold")
@@ -107,7 +109,11 @@ class VectorForgeApp(ctk.CTk):
             ("color", "Colour"),
         ):
             ctk.CTkRadioButton(
-                row, text=lab, variable=self.color_mode, value=val
+                row,
+                text=lab,
+                variable=self.color_mode,
+                value=val,
+                command=self._update_mode_visibility,
             ).pack(side="left", padx=3)
 
         self._section(side, "Max process size (px)")
@@ -130,31 +136,44 @@ class VectorForgeApp(ctk.CTk):
             values=["otsu", "fixed", "adaptive"],
         ).pack(fill="x", padx=12, pady=2)
 
-        self._section(side, "Potrace (outline / B&W)")
-        self.turdsize, _ = self._slider(side, "Turd size (despeckle)", 0, 20, 2, int_mode=True)
-        self.alphamax, _ = self._slider(side, "Corner threshold α", 0, 1.34, 1.0)
-        self.opttolerance, _ = self._slider(side, "Curve optimize", 0.05, 1.0, 0.2)
-        self.stroke_width, _ = self._slider(side, "Stroke width (outline)", 0.25, 4, 1.0)
-        self.invert_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(side, text="Invert ink", variable=self.invert_var).pack(
-            anchor="w", padx=12, pady=4
+        # Potrace section (always relevant for outline/B&W)
+        self._potrace_frame = ctk.CTkFrame(side, fg_color="transparent")
+        self._potrace_frame.pack(fill="x")
+        self._section(self._potrace_frame, "Potrace (outline / B&W)")
+        self.turdsize, _ = self._slider(
+            self._potrace_frame, "Turd size (despeckle)", 0, 20, 8, int_mode=True
         )
+        self.alphamax, _ = self._slider(
+            self._potrace_frame, "Corner threshold α", 0, 1.34, 0.90
+        )
+        self.opttolerance, _ = self._slider(
+            self._potrace_frame, "Curve optimize", 0.05, 1.0, 0.40
+        )
+        self.stroke_width, _ = self._slider(
+            self._potrace_frame, "Stroke width (outline)", 0.25, 4, 1.0
+        )
+        self.invert_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self._potrace_frame, text="Invert ink", variable=self.invert_var
+        ).pack(anchor="w", padx=12, pady=4)
 
-        self._section(side, "Vtracer (colour only)")
+        # Vtracer section — hidden unless Colour mode
+        self._vtracer_frame = ctk.CTkFrame(side, fg_color="transparent")
+        self._section(self._vtracer_frame, "Vtracer (colour only)")
         self.filter_speckle, _ = self._slider(
-            side, "Filter speckle", 0, 20, 4, int_mode=True
+            self._vtracer_frame, "Filter speckle", 0, 20, 4, int_mode=True
         )
         self.color_precision, _ = self._slider(
-            side, "Color precision", 1, 8, 6, int_mode=True
+            self._vtracer_frame, "Color precision", 1, 8, 6, int_mode=True
         )
         self.layer_difference, _ = self._slider(
-            side, "Layer difference", 1, 32, 14, int_mode=True
+            self._vtracer_frame, "Layer difference", 1, 32, 14, int_mode=True
         )
         self.corner_threshold, _ = self._slider(
-            side, "Corner threshold °", 0, 180, 50, int_mode=True
+            self._vtracer_frame, "Corner threshold °", 0, 180, 50, int_mode=True
         )
         self.path_precision, _ = self._slider(
-            side, "Path precision", 1, 8, 3, int_mode=True
+            self._vtracer_frame, "Path precision", 1, 8, 3, int_mode=True
         )
 
         self._section(side, "Background removal")
@@ -209,7 +228,6 @@ class VectorForgeApp(ctk.CTk):
         self.progress.set(0)
         self.progress.pack(fill="x", padx=12, pady=(0, 16))
 
-        # Main view
         main = ctk.CTkFrame(self, corner_radius=0)
         main.grid(row=0, column=1, sticky="nsew")
         main.grid_rowconfigure(1, weight=1)
@@ -253,6 +271,18 @@ class VectorForgeApp(ctk.CTk):
             text_color="gray60",
         )
         self.drop_hint.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _update_mode_visibility(self) -> None:
+        """Show only controls that affect the current mode."""
+        cm = self.color_mode.get()
+        if cm == "color":
+            if not self._vtracer_frame.winfo_ismapped():
+                # pack after potrace frame
+                self._vtracer_frame.pack(
+                    fill="x", after=self._potrace_frame
+                )
+        else:
+            self._vtracer_frame.pack_forget()
 
     def _section(self, parent, title: str) -> None:
         ctk.CTkLabel(
@@ -303,6 +333,7 @@ class VectorForgeApp(ctk.CTk):
             self.preset_var.set(key)
             self.preset_desc.configure(text=PRESETS[key]["description"])
             self._apply_preset_to_controls(key)
+            self._update_mode_visibility()
 
     def _apply_preset_to_controls(self, key: str) -> None:
         p = PRESETS[key]["params"]
@@ -312,9 +343,9 @@ class VectorForgeApp(ctk.CTk):
         self.contrast.set(p.get("contrast", 0.3))
         self.blacklevel.set(p.get("blacklevel", 0.5))
         self.threshold_method.set(p.get("threshold_method", "otsu"))
-        self.turdsize.set(p.get("turdsize", 2))
-        self.alphamax.set(p.get("alphamax", 1.0))
-        self.opttolerance.set(p.get("opttolerance", 0.2))
+        self.turdsize.set(p.get("turdsize", 8))
+        self.alphamax.set(p.get("alphamax", 0.9))
+        self.opttolerance.set(p.get("opttolerance", 0.4))
         self.stroke_width.set(p.get("stroke_width", 1.0))
         self.filter_speckle.set(p.get("filter_speckle", 4))
         self.color_precision.set(p.get("color_precision", 6))
@@ -331,7 +362,6 @@ class VectorForgeApp(ctk.CTk):
             self.color_mode.set("color")
         else:
             self.color_mode.set("bw")
-        # refresh labels
         for s in (
             self.max_side,
             self.edge_strength,
@@ -445,10 +475,14 @@ class VectorForgeApp(ctk.CTk):
         cw = max(100, self.canvas.winfo_width())
         ch = max(100, self.canvas.winfo_height())
         half = cw // 2 - 8
+
         def fit(im: Image.Image) -> Image.Image:
             w, h = im.size
             sc = min(half / w, ch / h, 1.0) * 0.92
-            return im.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.Resampling.BILINEAR).convert("RGB")
+            return im.resize(
+                (max(1, int(w * sc)), max(1, int(h * sc))), Image.Resampling.BILINEAR
+            ).convert("RGB")
+
         L, R = fit(left), fit(right)
         canvas_img = Image.new("RGB", (cw, ch), (26, 26, 28))
         canvas_img.paste(L, (8, (ch - L.height) // 2))
@@ -589,7 +623,10 @@ class VectorForgeApp(ctk.CTk):
             base = self._active_image()
             assert base is not None
             out = wand_at(
-                base, pt[0], pt[1], erase=erase,
+                base,
+                pt[0],
+                pt[1],
+                erase=erase,
                 tolerance=int(round(self.tolerance.get())),
             )
             self._subject = out
@@ -650,7 +687,6 @@ class VectorForgeApp(ctk.CTk):
                 on_progress=prog,
             )
             self._svg_text = result.svg
-            # Live path preview = actual geometry
             vp = render_svg_preview(result.svg, max_side=1200)
 
             def done() -> None:
