@@ -1,7 +1,7 @@
 """
 VectorForge v1.0 pipeline.
 
-CNC / Logo / B&W → preprocess → Potrace
+CNC / Logo / B&W → preprocess (logo text morph) → Potrace
 Colour / Photo    → preprocess → vtracer
 """
 
@@ -51,7 +51,7 @@ class VectorResult:
     params: dict[str, Any]
     warning: str | None = None
     preprocess_note: str = ""
-    preview_png: Image.Image | None = None
+    preview_png: Image.Image | None = None  # binary mask preview
     engine: str = "potrace"
 
 
@@ -138,15 +138,16 @@ def vectorize_image(
     svg: str
 
     if engine == "potrace":
-        report("Preprocess (outline)", 0.15)
+        report("Preprocess (logo/text binary)", 0.15)
         preview_img, binary = preprocess_binary_for_potrace(
             work,
-            denoise=float(vt.get("denoise", 0.35)),
-            contrast=float(vt.get("contrast", 0.28)),
-            edge_strength=float(vt.get("edge_strength", 0.30)),
+            denoise=float(vt.get("denoise", 0.40)),
+            contrast=float(vt.get("contrast", 0.25)),
+            edge_strength=float(vt.get("edge_strength", 0.25)),
             threshold_method=str(vt.get("threshold_method", "otsu")),
             blacklevel=float(vt.get("blacklevel", 0.5)),
             invert=bool(vt.get("invert", False)),
+            logo_text=bool(vt.get("logo_text", True)),
         )
         report("Potrace", 0.5)
         pkwargs = potrace_params_from_ui(vt)
