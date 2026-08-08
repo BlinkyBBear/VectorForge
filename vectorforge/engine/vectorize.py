@@ -21,6 +21,7 @@ from vectorforge import __version__
 from .image_ops import downsample_image
 from .memory import clamp_process_size
 from .potrace_engine import potrace_binary_to_svg, potrace_params_from_ui
+from .centerline import centerline_binary_to_svg
 from .preprocess import (
     describe_preprocess,
     preprocess_binary_for_potrace,
@@ -140,7 +141,46 @@ def vectorize_image(
     preview_img: Image.Image | None = None
     svg: str
 
-    if engine == "potrace":
+    if engine in ("centerline", "skeleton", "centreline"):
+        report("Preprocess (centerline)", 0.15)
+        raw_sf = vt.get("scale_factor", None)
+        try:
+            raw_sf_f = float(raw_sf) if raw_sf is not None else 0.0
+        except (TypeError, ValueError):
+            raw_sf_f = 0.0
+        auto_scale = bool(vt.get("auto_scale", raw_sf_f < 1.01))
+        hp = vt.get("highpass_radius", None)
+        preview_bin, binary, pre_meta = preprocess_binary_for_potrace(
+            work,
+            denoise=float(vt.get("denoise", 0.40)),
+            contrast=float(vt.get("contrast", 0.25)),
+            edge_strength=float(vt.get("edge_strength", 0.25)),
+            threshold_method=str(vt.get("threshold_method", "otsu")),
+            blacklevel=float(vt.get("blacklevel", 0.5)),
+            invert=bool(vt.get("invert", False)),
+            logo_text=bool(vt.get("logo_text", False)),
+            highpass_radius=float(hp) if hp is not None else None,
+            scale_factor=raw_sf_f if raw_sf_f >= 1.01 else None,
+            auto_scale=auto_scale,
+        )
+        vt["highpass_radius"] = pre_meta["highpass_radius"]
+        vt["scale_factor"] = pre_meta["scale_factor"]
+        vt["binary_size"] = pre_meta["binary_size"]
+        report("Skeleton / centerline", 0.45)
+        svg, stats, skel_preview = centerline_binary_to_svg(
+            binary,
+            min_branch_len=int(vt.get("min_branch_len", 10)),
+            spur_prune=float(vt.get("spur_prune", 0.55)),
+            simplify=float(vt.get("centerline_simplify", vt.get("simplify_strength", 0.35)) * 2.5 + 0.5),
+            stroke_width=float(vt.get("stroke_width", 1.0)),
+            thin_method=str(vt.get("thin_method", "auto")),
+        )
+        # show skeleton mask as binary preview
+        preview_img = skel_preview
+        path_count, node_estimate = stats.path_count, stats.node_estimate
+        vt["color_mode"] = "centerline"
+        engine = "centerline"
+    elif engine == "potrace":
         report("Preprocess (mkbitmap)", 0.15)
         raw_sf = vt.get("scale_factor", None)
         try:
@@ -219,7 +259,7 @@ def vectorize_image(
     else:
         svg = meta + svg
 
-    quality = analyze_svg_quality(svg)
+    quality = analyze_svg_quality(svg, centerline=(engine == "centerline"))
     if quality.path_count:
         path_count = quality.path_count
         node_estimate = quality.node_estimate

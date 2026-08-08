@@ -127,6 +127,7 @@ class VectorForgeApp(ctk.CTk):
         for val, lab in (
             ("outline", "Outline-only"),
             ("bw", "Pure B&W"),
+            ("centerline", "Centerline"),
             ("color", "Colour"),
         ):
             ctk.CTkRadioButton(
@@ -135,7 +136,7 @@ class VectorForgeApp(ctk.CTk):
                 variable=self.color_mode,
                 value=val,
                 command=self._update_mode_visibility,
-            ).pack(side="left", padx=3)
+            ).pack(side="left", padx=2)
 
         # ---- Simple panel: few key sliders ----
         self._simple_frame = ctk.CTkFrame(side, fg_color="transparent")
@@ -242,6 +243,24 @@ class VectorForgeApp(ctk.CTk):
             variable=self.sil_strength,
             values=["Soft", "Normal", "Aggressive"],
         ).pack(fill="x", padx=12, pady=2)
+
+        self._centerline_frame = ctk.CTkFrame(self._advanced_frame, fg_color="transparent")
+        self._section(self._centerline_frame, "Centerline / Skeleton")
+        ctk.CTkLabel(
+            self._centerline_frame,
+            text="Thick strokes → single centre path (open strokes)",
+            font=ctk.CTkFont(size=11),
+            text_color="gray60",
+        ).pack(anchor="w", padx=12)
+        self.min_branch_len, _ = self._slider(
+            self._centerline_frame, "Min branch length (px)", 2, 40, 10, int_mode=True
+        )
+        self.spur_prune, _ = self._slider(
+            self._centerline_frame, "Spur prune strength", 0, 1, 0.55
+        )
+        self.centerline_simplify, _ = self._slider(
+            self._centerline_frame, "Path simplify", 0.05, 1.0, 0.40
+        )
 
         self._vtracer_frame = ctk.CTkFrame(self._advanced_frame, fg_color="transparent")
         self._section(self._vtracer_frame, "Vtracer (colour only)")
@@ -389,11 +408,19 @@ class VectorForgeApp(ctk.CTk):
         if self._ui_mode.get() != "advanced":
             return
         cm = self.color_mode.get()
+        # Vtracer only for colour
         if cm == "color":
             if not self._vtracer_frame.winfo_ismapped():
                 self._vtracer_frame.pack(fill="x", after=self._potrace_frame)
         else:
             self._vtracer_frame.pack_forget()
+        # Centerline controls
+        if cm == "centerline":
+            if not self._centerline_frame.winfo_ismapped():
+                self._centerline_frame.pack(fill="x", after=self._potrace_frame)
+        else:
+            self._centerline_frame.pack_forget()
+        # Potrace silhouette less relevant for centerline but keep frame
 
     def _section(self, parent, title: str) -> None:
         ctk.CTkLabel(
@@ -465,6 +492,10 @@ class VectorForgeApp(ctk.CTk):
         self.alphamax.set(p.get("alphamax", 0.65))
         self.opttolerance.set(p.get("opttolerance", 0.60))
         self.stroke_width.set(p.get("stroke_width", 1.0))
+        if hasattr(self, "min_branch_len"):
+            self.min_branch_len.set(p.get("min_branch_len", 10))
+            self.spur_prune.set(p.get("spur_prune", 0.55))
+            self.centerline_simplify.set(p.get("centerline_simplify", 0.4))
         self.filter_speckle.set(p.get("filter_speckle", 4))
         self.color_precision.set(p.get("color_precision", 6))
         self.layer_difference.set(p.get("layer_difference", 14))
@@ -472,7 +503,7 @@ class VectorForgeApp(ctk.CTk):
         self.path_precision.set(p.get("path_precision", 3))
         self.invert_var.set(bool(p.get("invert", False)))
         cm = str(p.get("color_mode", "outline"))
-        if cm in ("outline", "bw", "color"):
+        if cm in ("outline", "bw", "color", "centerline"):
             self.color_mode.set(cm)
         elif p.get("output_style") == "outline":
             self.color_mode.set("outline")
@@ -565,6 +596,18 @@ class VectorForgeApp(ctk.CTk):
         elif cm == "bw":
             o["engine"] = "potrace"
             o["output_style"] = "fill"
+        elif cm == "centerline":
+            o["engine"] = "centerline"
+            o["output_style"] = "centerline"
+            o["logo_text"] = False
+            if not simple:
+                o["min_branch_len"] = int(round(self.min_branch_len.get()))
+                o["spur_prune"] = float(self.spur_prune.get())
+                o["centerline_simplify"] = float(self.centerline_simplify.get())
+            else:
+                o["min_branch_len"] = 10
+                o["spur_prune"] = 0.55
+                o["centerline_simplify"] = 0.40
         else:
             o["engine"] = "vtracer"
             o["colormode"] = "color"

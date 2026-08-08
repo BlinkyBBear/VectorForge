@@ -1,6 +1,14 @@
 # Changelog
 
-## [1.0.2] — 2026-08-08
+## [1.0.3] — 2026-08-08
+
+### Added
+- **Centerline / Skeleton** mode (Inkscape-style): thick strokes → single open stroke paths
+- Zhang–Suen thinning + spur prune + polyline fit (offline, no contrib packages)
+- Preset **Centerline / Skeleton** + Advanced: min branch length, spur prune, simplify
+- Quality tip: `Centerline-ready: N stroke paths`
+
+[1.0.2] — 2026-08-08
 
 ### Fixed
 - **Silhouette mode** no longer drops text / secondary animals (tiered Soft/Normal/Aggressive)

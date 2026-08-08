@@ -40,7 +40,7 @@ def _path_looks_closed(d: str) -> bool:
     return False
 
 
-def analyze_svg_quality(svg: str) -> QualityReport:
+def analyze_svg_quality(svg: str, *, centerline: bool = False) -> QualityReport:
     paths = list(_PATH_RE.finditer(svg or ""))
     path_count = len(paths)
     closed = open_n = nodes = 0
@@ -58,6 +58,13 @@ def analyze_svg_quality(svg: str) -> QualityReport:
     if path_count == 0:
         tip = "No paths produced — adjust Raster prep / Binary mask"
         ok = False
+    elif centerline and path_count > 0:
+        tip = (
+            f"Centerline-ready: {path_count} stroke path"
+            f"{'s' if path_count != 1 else ''} "
+            f"({open_n} open, {closed} closed)"
+        )
+        ok = True
     elif open_n > 0:
         tip = (
             f"Warning: {open_n} open path(s) of {path_count} — "

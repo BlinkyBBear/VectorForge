@@ -28,3 +28,4 @@ __all__ = [
     "render_svg_preview",
     "analyze_svg_quality",
 ]
+from .centerline import centerline_binary_to_svg

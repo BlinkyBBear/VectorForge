@@ -155,6 +155,30 @@ PRESETS: dict[str, dict[str, Any]] = {
             "invert": False,
         },
     },
+    "centerline": {
+        "label": "Centerline / Skeleton",
+        "description": "Single-stroke centre paths (handwriting, neon, light engrave). Open stroke SVG.",
+        "params": {
+            "engine": "centerline",
+            "output_style": "centerline",
+            "color_mode": "centerline",
+            "threshold_method": "otsu",
+            "blacklevel": 0.5,
+            "denoise": 0.35,
+            "contrast": 0.30,
+            "edge_strength": 0.15,
+            "highpass_radius": 2.0,
+            "scale_factor": 1.5,
+            "auto_scale": False,
+            "min_branch_len": 12,
+            "spur_prune": 0.65,
+            "centerline_simplify": 0.5,
+            "stroke_width": 1.2,
+            "logo_text": False,
+            "max_process_size": 2800,
+            "invert": False,
+        },
+    },
 }
 
 PRESETS["illustration"] = PRESETS["colour"]
@@ -186,6 +210,9 @@ def apply_preset(preset_id: str, overrides: dict[str, Any] | None = None) -> dic
     elif cm in ("bw", "binary", "pure_bw", "blackwhite"):
         params["engine"] = "potrace"
         params["output_style"] = params.get("output_style") or "fill"
+    elif cm in ("centerline", "skeleton", "centreline"):
+        params["engine"] = "centerline"
+        params["output_style"] = "centerline"
     elif cm in ("color", "colour", "compound"):
         params["engine"] = "vtracer"
         params["colormode"] = "color"
@@ -199,6 +226,7 @@ def apply_preset(preset_id: str, overrides: dict[str, Any] | None = None) -> dic
 def preset_choices() -> list[tuple[str, str]]:
     order = [
         "cnc_outline",
+        "centerline",
         "laser_pro",
         "logo",
         "colour",

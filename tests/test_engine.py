@@ -187,3 +187,38 @@ class SilhouetteTierTests(unittest.TestCase):
         svg = '<svg viewBox="0 0 10 10"><path d="M0,0 L10,0 L10,10 L0,10 Z"/></svg>'
         dxf = svg_to_dxf(svg)
         self.assertIn("$INSUNITS", dxf)
+
+
+class CenterlineTests(unittest.TestCase):
+    def test_thick_stroke_centerline(self) -> None:
+        import numpy as np
+        img = Image.new("RGB", (320, 200), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        pts = [(30 + i, 100 + int(40 * np.sin(i / 25.0))) for i in range(0, 260, 2)]
+        d.line(pts, fill=(0, 0, 0), width=14)
+        result = vectorize_image(
+            img,
+            VectorizeParams(
+                preset_id="centerline",
+                max_process_size=320,
+                overrides={
+                    "color_mode": "centerline",
+                    "scale_factor": 1.0,
+                    "auto_scale": False,
+                    "min_branch_len": 6,
+                },
+            ),
+        )
+        self.assertEqual(result.engine, "centerline")
+        self.assertGreaterEqual(result.path_count, 1)
+        self.assertIn("stroke=", result.svg)
+        self.assertIn("Centerline-ready", result.quality_tip or "")
+
+    def test_outline_still_closed(self) -> None:
+        result = vectorize_image(
+            _kelpie_like(400),
+            VectorizeParams(preset_id="cnc_outline", max_process_size=400),
+        )
+        self.assertEqual(result.engine, "potrace")
+        self.assertGreater(result.path_count, 0)
+        self.assertGreaterEqual(result.svg.upper().count("Z"), result.path_count)
