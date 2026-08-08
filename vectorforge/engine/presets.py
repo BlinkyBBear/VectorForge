@@ -19,19 +19,19 @@ PRESETS: dict[str, dict[str, Any]] = {
             "color_mode": "outline",
             "threshold_method": "otsu",
             "blacklevel": 0.5,
-            "denoise": 0.22,
-            "contrast": 0.30,
-            "edge_strength": 0.35,
-            "turdsize": 2,
-            "alphamax": 1.0,
-            "opttolerance": 0.2,
+            "denoise": 0.40,
+            "contrast": 0.28,
+            "edge_strength": 0.30,
+            "turdsize": 8,
+            "alphamax": 0.9,
+            "opttolerance": 0.35,
             "opticurve": True,
             "turnpolicy": "minority",
             "stroke_width": 1.0,
             "max_process_size": 3600,
             "invert": False,
-            "detail": 0.9,
-            "simplify_strength": 0.15,
+            "detail": 0.85,
+            "simplify_strength": 0.25,
         },
     },
     "laser_pro": {
@@ -43,12 +43,12 @@ PRESETS: dict[str, dict[str, Any]] = {
             "color_mode": "bw",
             "threshold_method": "otsu",
             "blacklevel": 0.5,
-            "denoise": 0.28,
-            "contrast": 0.35,
-            "edge_strength": 0.4,
-            "turdsize": 3,
-            "alphamax": 1.0,
-            "opttolerance": 0.22,
+            "denoise": 0.32,
+            "contrast": 0.32,
+            "edge_strength": 0.35,
+            "turdsize": 5,
+            "alphamax": 0.95,
+            "opttolerance": 0.28,
             "opticurve": True,
             "turnpolicy": "minority",
             "max_process_size": 3200,
@@ -66,12 +66,12 @@ PRESETS: dict[str, dict[str, Any]] = {
             "color_mode": "bw",
             "threshold_method": "otsu",
             "blacklevel": 0.48,
-            "denoise": 0.18,
+            "denoise": 0.22,
             "contrast": 0.28,
-            "edge_strength": 0.45,
-            "turdsize": 1,
+            "edge_strength": 0.40,
+            "turdsize": 3,
             "alphamax": 0.95,
-            "opttolerance": 0.15,
+            "opttolerance": 0.18,
             "opticurve": True,
             "turnpolicy": "minority",
             "max_process_size": 4000,
@@ -157,7 +157,6 @@ PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-# aliases
 PRESETS["illustration"] = PRESETS["colour"]
 PRESETS["laser"] = PRESETS["laser_pro"]
 PRESETS["max"] = PRESETS["photoreal"]
@@ -180,7 +179,6 @@ def apply_preset(preset_id: str, overrides: dict[str, Any] | None = None) -> dic
         for k, v in overrides.items():
             if v is not None:
                 params[k] = v
-    # Colour mode toggle overrides
     cm = str(params.get("color_mode", "")).lower()
     if cm in ("outline", "outline-only", "cnc"):
         params["engine"] = "potrace"

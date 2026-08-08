@@ -51,7 +51,7 @@ class VectorResult:
     params: dict[str, Any]
     warning: str | None = None
     preprocess_note: str = ""
-    preview_png: Image.Image | None = None  # binary/preprocessed preview
+    preview_png: Image.Image | None = None
     engine: str = "potrace"
 
 
@@ -141,9 +141,9 @@ def vectorize_image(
         report("Preprocess (outline)", 0.15)
         preview_img, binary = preprocess_binary_for_potrace(
             work,
-            denoise=float(vt.get("denoise", 0.22)),
-            contrast=float(vt.get("contrast", 0.3)),
-            edge_strength=float(vt.get("edge_strength", 0.35)),
+            denoise=float(vt.get("denoise", 0.35)),
+            contrast=float(vt.get("contrast", 0.28)),
+            edge_strength=float(vt.get("edge_strength", 0.30)),
             threshold_method=str(vt.get("threshold_method", "otsu")),
             blacklevel=float(vt.get("blacklevel", 0.5)),
             invert=bool(vt.get("invert", False)),
@@ -182,7 +182,6 @@ def vectorize_image(
     report("Sanitize SVG", 0.9)
     w = work.width
     h = work.height
-    # Prefer dimensions from svg if present
     m = re.search(r'viewBox="0\s+0\s+([\d.]+)\s+([\d.]+)"', svg)
     if m:
         w, h = int(float(m.group(1))), int(float(m.group(2)))
