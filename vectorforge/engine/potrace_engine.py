@@ -1,7 +1,8 @@
 """
-Potrace-based outline engine (v1.0 primary for CNC / logo / B&W).
+Potrace-based outline engine (v1.0).
 
-Uses pure-Python `potracer` (offline, no system binary required).
+Includes optional outer+counters filter: keep large outer paths and
+meaningful holes, drop tiny junk paths that break letter quality.
 """
 
 from __future__ import annotations
@@ -82,22 +83,6 @@ def _path_bbox_area(curve) -> float:
     return max(0.0, (max(xs) - min(xs)) * (max(ys) - min(ys)))
 
 
-def _ensure_min_resolution(gray: np.ndarray, min_side: int = 1400) -> tuple[np.ndarray, float]:
-    """
-    Upscale small bitmaps with nearest-neighbour so Potrace has enough pixels.
-    Returns (scaled_gray, scale_factor). scale_factor is used to note original size.
-    """
-    h, w = gray.shape[:2]
-    side = max(h, w)
-    if side >= min_side:
-        return gray, 1.0
-    scale = min_side / float(side)
-    nw, nh = int(round(w * scale)), int(round(h * scale))
-    # nearest keeps binary edges crisp
-    scaled = cv2.resize(gray, (nw, nh), interpolation=cv2.INTER_NEAREST)
-    return scaled, scale
-
-
 def potrace_binary_to_svg(
     binary_bw: np.ndarray | Image.Image,
     *,
@@ -110,12 +95,12 @@ def potrace_binary_to_svg(
     stroke_width: float = 1.0,
     filter_border: bool = True,
     blacklevel: float = 0.5,
-    min_trace_side: int = 1400,
+    outer_and_counters_only: bool = True,
+    min_path_area: float = 40.0,
 ) -> tuple[str, PathStats]:
     """
-    binary_bw: grayscale where dark (near 0) is ink to vectorize.
-    style outline → stroke only (CNC cut paths)
-    style fill → filled black with evenodd (laser engrave / solid logos)
+    binary_bw: dark = ink.
+    outer_and_counters_only: drop tiny junk paths; keep outer shapes + letter counters.
     """
     if isinstance(binary_bw, Image.Image):
         gray = np.array(binary_bw.convert("L"), dtype=np.uint8)
@@ -125,15 +110,11 @@ def potrace_binary_to_svg(
             gray = gray[:, :, 0]
         gray = gray.astype(np.uint8)
 
-    orig_h, orig_w = gray.shape[:2]
+    h, w = gray.shape[:2]
 
-    # Force pure binary (no residual grays that create double contours)
+    # Force pure binary
     _, pure = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
     gray = pure
-
-    # Upscale small logos — critical for clean Potrace geometry
-    gray, scale = _ensure_min_resolution(gray, min_side=min_trace_side)
-    h, w = gray.shape[:2]
 
     bl = float(np.clip(blacklevel, 0.02, 0.98))
     bm = Bitmap(gray, blacklevel=bl)
@@ -150,12 +131,14 @@ def potrace_binary_to_svg(
     total_nodes = 0
     path_count = 0
 
-    # Scale path coords back to original image size if we upscaled
-    inv = 1.0 / scale if scale != 1.0 else 1.0
+    # Collect paths with area for optional filtering
+    candidates: list[tuple[float, str, int]] = []
 
     for curve in traced:
-        area = abs(getattr(curve._path, "area", 0))
+        area = abs(float(getattr(curve._path, "area", 0)))
         bbox_area = _path_bbox_area(curve)
+
+        # Drop near-full-image border artifacts
         if filter_border and (
             area > img_area * 0.92 or bbox_area > img_area * 0.98
         ):
@@ -165,16 +148,12 @@ def potrace_binary_to_svg(
         if not d:
             continue
 
-        # Rescale coordinates to original pixel space
-        if inv != 1.0:
-            # simple numeric scale of all floats in the path
-            import re as _re
+        if outer_and_counters_only and area < min_path_area:
+            continue
 
-            def _scale_num(m: _re.Match[str]) -> str:
-                return f"{float(m.group(0)) * inv:.3f}"
+        candidates.append((area, d, nodes))
 
-            d = _re.sub(r"-?\d+\.\d+|-?\d+", _scale_num, d)
-
+    for area, d, nodes in candidates:
         total_nodes += nodes
         path_count += 1
         if style == "outline":
@@ -189,12 +168,10 @@ def potrace_binary_to_svg(
             )
 
     body = "\n  ".join(path_elems)
-    # Emit SVG at original dimensions
-    out_w, out_h = orig_w, orig_h
     svg = (
         f'<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<svg xmlns="http://www.w3.org/2000/svg" '
-        f'width="{out_w}" height="{out_h}" viewBox="0 0 {out_w} {out_h}">\n'
+        f'width="{w}" height="{h}" viewBox="0 0 {w} {h}">\n'
         f"  {body}\n"
         f"</svg>\n"
     )
@@ -220,4 +197,6 @@ def potrace_params_from_ui(params: dict[str, Any]) -> dict[str, Any]:
         "turnpolicy": str(params.get("turnpolicy", "minority")),
         "stroke_width": float(params.get("stroke_width", 1.0)),
         "blacklevel": float(params.get("blacklevel", 0.5)),
+        "outer_and_counters_only": bool(params.get("outer_and_counters_only", True)),
+        "min_path_area": float(params.get("min_path_area", 40.0)),
     }

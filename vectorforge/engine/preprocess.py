@@ -1,10 +1,11 @@
 """
-v1.0 preprocessing — mkbitmap-inspired pipeline for geometric fidelity.
+v1.0 preprocessing — mkbitmap-inspired + logo/text morphology.
 
-Official Potrace quality comes from mkbitmap order:
-  greyscale → highpass → light blur → INTERPOLATED scale-up → threshold → potrace
+Pipeline for CNC / logo outlines:
+  greyscale → denoise → highpass → contrast → scale UP → threshold
+  → mild close (keep letter strokes continuous) → despeckle → Potrace
 
-We previously thresholded first then nearest-upscaled binary (wrong order).
+Yellow logo on black (or black on yellow) forced to pure binary with no grey fringe.
 """
 
 from __future__ import annotations
@@ -28,14 +29,9 @@ def to_gray_u8(img: Image.Image) -> np.ndarray:
 
 
 def highpass(gray: np.ndarray, radius: float = 4.0) -> np.ndarray:
-    """
-    mkbitmap-style highpass: subtract local mean so lines/text stay while
-    uneven backgrounds flatten. radius ~ filter scale in pixels.
-    """
     r = max(1.0, float(radius))
     k = int(r * 2) | 1
     blur = cv2.GaussianBlur(gray, (k, k), r)
-    # highpass residual mapped back to 0..255 mid-grey
     hp = cv2.addWeighted(gray, 1.5, blur, -0.5, 128)
     return np.clip(hp, 0, 255).astype(np.uint8)
 
@@ -61,102 +57,140 @@ def enhance_contrast(gray: np.ndarray, amount: float) -> np.ndarray:
 
 
 def scale_greyscale(gray: np.ndarray, factor: float) -> np.ndarray:
-    """Interpolate greyscale UP before threshold (mkbitmap core idea)."""
     f = float(factor)
     if f <= 1.01:
         return gray
     h, w = gray.shape[:2]
     nw, nh = int(round(w * f)), int(round(h * f))
-    # cubic preserves more edge energy than linear for logos
     return cv2.resize(gray, (nw, nh), interpolation=cv2.INTER_CUBIC)
 
 
-def threshold_for_outline(
+def threshold_hard(
     gray: np.ndarray,
     *,
     method: str = "otsu",
     blacklevel: float = 0.5,
     invert: bool = False,
 ) -> np.ndarray:
-    """Return binary uint8: 0 = ink, 255 = background."""
-    g = gray
+    """
+    Pure binary: 0 = ink, 255 = background.
+    Forces no grey fringe (important for yellow signs / black text).
+    """
     method = (method or "otsu").lower()
     if method == "adaptive":
         ink_white = cv2.adaptiveThreshold(
-            g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 8
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 6
         )
     elif method == "fixed":
         thr = int(np.clip(blacklevel, 0.02, 0.98) * 255)
-        _, ink_white = cv2.threshold(g, thr, 255, cv2.THRESH_BINARY_INV)
+        _, ink_white = cv2.threshold(gray, thr, 255, cv2.THRESH_BINARY_INV)
     else:
-        _, ink_white = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # Otsu then snap any residual midtones
+        _, ink_white = cv2.threshold(
+            gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
 
     if invert:
         ink_white = cv2.bitwise_not(ink_white)
 
-    return cv2.bitwise_not(ink_white)  # 0=ink, 255=bg
+    # Hard snap — kill grey fringe completely
+    _, pure = cv2.threshold(ink_white, 127, 255, cv2.THRESH_BINARY)
+    # Convert to 0=ink, 255=bg
+    return cv2.bitwise_not(pure)
 
 
-def light_morphology(binary_bw: np.ndarray, denoise: float) -> np.ndarray:
+def logo_text_morphology(binary_bw: np.ndarray, denoise: float) -> np.ndarray:
+    """
+    binary_bw: 0=ink, 255=bg.
+
+    - Mild CLOSE so letter strokes (E bars, P bowl) stay continuous
+    - OPEN to kill speckles outside letters
+    - Stronger despeckle inside large black regions via connected-component size filter
+    """
     s = float(np.clip(denoise, 0.0, 1.0))
-    if s < 0.15:
-        return binary_bw
+    # work in ink=255 space
     ink = cv2.bitwise_not(binary_bw)
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k, iterations=1)
-    if s >= 0.7:
-        ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k, iterations=1)
-    return cv2.bitwise_not(ink)
+
+    # Mild close — reconnect broken letter strokes (1–2 px gaps)
+    k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k_close, iterations=1)
+
+    # Open — remove external speckles
+    k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k_open, iterations=1)
+
+    # Connected-component despeckle: drop tiny black islands
+    # Keep components above a size floor (stronger when denoise high)
+    min_area = int(8 + s * 40)  # ~8–48 px
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    cleaned = np.zeros_like(ink)
+    for i in range(1, n_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            cleaned[labels == i] = 255
+    ink = cleaned
+
+    # One more light close after despeckle so letters stay solid
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k_close, iterations=1)
+
+    return cv2.bitwise_not(ink)  # back to 0=ink
 
 
 def preprocess_binary_for_potrace(
     img: Image.Image,
     *,
-    denoise: float = 0.35,
-    contrast: float = 0.28,
-    edge_strength: float = 0.30,
+    denoise: float = 0.40,
+    contrast: float = 0.25,
+    edge_strength: float = 0.25,
     threshold_method: str = "otsu",
     blacklevel: float = 0.5,
     invert: bool = False,
     scale_factor: float | None = None,
+    logo_text: bool = True,
 ) -> tuple[Image.Image, np.ndarray]:
     """
-    mkbitmap order:
-      gray → denoise → highpass(edge) → contrast → scale UP → threshold → morph
-
-    Returns (preview RGB, binary 0=ink for Potrace Bitmap).
+    Returns (binary preview RGB for UI, binary array 0=ink for Potrace).
     """
     gray = to_gray_u8(img)
     gray = denoise_gray(gray, denoise)
 
-    # Highpass strength follows edge_strength (0 = skip)
     if edge_strength > 0.08:
-        radius = 2.0 + edge_strength * 6.0  # ~2–8 px
+        radius = 2.0 + edge_strength * 5.0
         gray = highpass(gray, radius=radius)
 
     gray = enhance_contrast(gray, contrast)
 
-    # Scale greyscale BEFORE threshold (critical for small logos)
     h, w = gray.shape[:2]
     side = max(h, w)
     if scale_factor is None:
-        # aim for ~1600px side after scale, clamp 1–4×
-        target = 1600.0
+        target = 1800.0  # a bit more resolution for text
         scale_factor = float(np.clip(target / max(side, 1), 1.0, 4.0))
     gray = scale_greyscale(gray, scale_factor)
 
-    binary = threshold_for_outline(
+    binary = threshold_hard(
         gray,
         method=threshold_method,
         blacklevel=blacklevel,
         invert=invert,
     )
-    binary = light_morphology(binary, denoise)
 
-    # Auto-invert if ink dominates (typical wrong polarity)
+    if logo_text:
+        binary = logo_text_morphology(binary, denoise)
+    else:
+        # light open only
+        if denoise > 0.15:
+            ink = cv2.bitwise_not(binary)
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k, iterations=1)
+            binary = cv2.bitwise_not(ink)
+
+    # Auto-invert if ink dominates
     ink_frac = float(np.mean(binary < 128))
     if ink_frac > 0.55 and not invert:
         binary = cv2.bitwise_not(binary)
+
+    # Final hard snap — zero grey
+    _, binary = cv2.threshold(binary, 127, 255, cv2.THRESH_BINARY)
 
     preview = Image.fromarray(cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB), "RGB")
     return preview, binary
